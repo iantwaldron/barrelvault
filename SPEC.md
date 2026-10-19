@@ -46,7 +46,7 @@ One User row is seeded for the account, with `is_agent` false. An agent that wri
 
 ### Task
 
-A task may contain tasks, with the same fields at every depth. An empty `parent_id` is a root, and a root may have no children. Reads load roots, then direct children. Setting a parent checks the ancestor chain for a cycle.
+A task may contain tasks, with the same fields at every depth. An empty `parent_id` is a root, and a root may have no children. The default read is one level: roots, or the direct children of a parent. `tree` returns every task under that parent. Setting a parent checks the ancestor chain for a cycle.
 
 | column           | type     | notes                                                     |
 | ---------------- | -------- | --------------------------------------------------------- |
@@ -132,7 +132,9 @@ A model may suggest a tier later. That path is unused, and no source for the tie
 
 ## Lists
 
-`list_tasks`, the task list, today, stale items, and the daily summary load one working set, then filter and order it in the service. The query loads the account's tasks. Once more than one user exists, it loads that user's tasks. Status, tier, due date, text, tags, and parent are applied in Python on that set. Each check takes the field value and the requested value. The tag check uses the shared token helper on the task's stored string. A tag matches a whole token. `deal` does not match `deal:chad`. Order is `high`, then `low`, then `maintenance`, then due date, with undated tasks after dated ones.
+`list_tasks`, the task list, today, stale items, and the daily summary load one working set, then filter and order it in the service. The query loads the account's tasks. Once more than one user exists, it loads that user's tasks. Status, tier, due date, text, and tags are applied in Python on that set. Each check takes the field value and the requested value. The tag check uses the shared token helper on the task's stored string. A tag matches a whole token. `deal` does not match `deal:chad`. Order is `high`, then `low`, then `maintenance`, then due date, with undated tasks after dated ones.
+
+`list_tasks` takes `parent` and `tree`. `tree` is a bool and defaults to false. False returns one level: roots when `parent` is empty, and the direct children of `parent` when it is set. True returns every task under `parent`, and every task when `parent` is empty. The parent row itself stays on `get_task`. Each returned row includes `parent_id`, and the caller nests the rows. The checks above apply to the rows that walk returned. A search of every level sets `tree`. On the REST route the query value is the string `0` or `1`, mapped to false and true. MCP passes the bool. Today, stale items, and the daily summary load the whole working set and take no `tree` argument.
 
 `get_task` stays a lookup by id. When time entries exist, an hours report sums in the query.
 
@@ -151,7 +153,7 @@ Block tools, for an agent or for the user:
 
 Task reads and writes that already fit this schema:
 
-- `list_tasks(filters: status, tier, tags, due_before, text)`
+- `list_tasks(filters: status, tier, tags, due_before, text, parent, tree=false)`
 - `get_task(id)`
 - `stale_items(days=7)`: open tasks whose `updated_at` is older than N days, plus overdue
 - `daily_summary(date=today PT)`: due, in progress, overdue, blocked
@@ -164,7 +166,7 @@ The same service functions under `/api`. Report routes that need time or goals w
 ## UI (v0.1)
 
 - Today: due, overdue, in progress, blocked, quick add.
-- Task list: roots, then direct children. Filters for status, tier, and tag.
+- Task list: roots, then direct children, one level per read. A filter search sets `tree`. Filters for status, tier, and tag.
 - Task detail: notes, tags, links, open blocks, history, estimate.
 - Reports wait on the time model. Manifest and Pi deploy stay in v0.1.
 

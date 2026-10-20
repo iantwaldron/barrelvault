@@ -32,81 +32,107 @@ The file is `barrelvault.db`. It is created when the database code needs it. The
 
 ## Data model
 
-The models are User, Task, Link, Block, and TaskHistory. Tags are a field on Task.
+The models are User, Token, Task, Block, and TaskHistory. Tags are a field on Task.
 
 ### User
 
-| column   | type | notes                               |
-| -------- | ---- | ----------------------------------- |
-| id       | int  | pk                                  |
-| name     | text | unique                              |
-| is_agent | bool | false is a person; true is an agent |
+| column        | type | notes                                                    |
+| ------------- | ---- | -------------------------------------------------------- |
+| id            | int  | pk                                                       |
+| name          | text | unique                                                   |
+| is_agent      | bool | false is a person; true is an agent                     |
+| password_hash | text | nullable; Argon2 hash of the person's password          |
 
-One User row is seeded for the account, with `is_agent` false. An agent that writes has its own User row, with `is_agent` true. The flag is set when the row is created and stays put. User rows are kept. v0.1's single token acts as the seeded user. A write names another User when an agent is the one acting.
+A check requires a person to have a `password_hash` and an agent to have none. One User row is seeded for the account, with `is_agent` false. An agent has its own User row, with `is_agent` true. The flag is set when the row is created and stays put. User rows are kept. The acting user is the user on the session.
+
+There is no owner column. The account set is the seeded user's id and the id of each of that user's agents. In v0.1 every agent user is that user's agent. A task belongs to the account when `created_by` is in that set.
+
+The server caches that set for the session, keyed by the session token. The cache stays on the server. Creating an agent user adds that id to the account's session caches. Every CRUD call checks against the ids in the cache. The client does not send a user id. A response names a person or an agent, and it does not carry a user id.
+
+### Token
+
+A token row is a session or an agent credential. The raw secret is shown once and is not stored. The row stores the SHA-256 hash.
+
+| column      | type     | notes                          |
+| ----------- | -------- | ------------------------------ |
+| id          | int      | pk                             |
+| user_id     | int      | FK to User                     |
+| secret_hash | text     | SHA-256 of the secret          |
+| kind        | text     | `session` or `agent`           |
+| created_at  | datetime | UTC                            |
+| expires_at  | datetime | UTC, nullable                  |
+| revoked_at  | datetime | UTC, nullable                  |
+
+A session row expires. An agent token lasts until it is revoked. A revoked token does not exchange.
+
+The person's login checks the password and mints a session. The browser receives that session in an `HttpOnly` cookie. An agent does not log in with a password.
 
 ### Task
 
-A task may contain tasks, with the same fields at every depth. An empty `parent_id` is a root, and a root may have no children. The default read is one level: roots, or the direct children of a parent. `tree` returns every task under that parent. Setting a parent checks the ancestor chain for a cycle.
+A task may contain tasks, with the same fields at every depth. An empty `parent_id` is a root, and a root may have no children. The default read is one level: roots, or the direct children of a parent. `tree` returns every task under that parent.
 
 | column           | type     | notes                                                     |
 | ---------------- | -------- | --------------------------------------------------------- |
 | id               | int      | pk                                                        |
-| parent_id        | int      | FK to Task, nullable, empty for a root                    |
+| parent_id        | int      | FK to Task, nullable, ON DELETE CASCADE, empty for a root |
 | title            | text     | required                                                  |
-| notes            | text     | markdown, nullable                                        |
-| tags             | text     | nullable; whitespace-separated tokens                     |
+| notes            | text     | markdown, nullable; a URL is written here                 |
+| tags             | text     | nullable; whitespace-separated tokens; save stores `""`   |
 | status           | smallint | `0` todo, `1` in_progress, `2` completed; default `0`     |
-| value_tier       | text     | `high`, `low`, `maintenance`; default `low`               |
 | estimate_minutes | smallint | nullable                                                  |
 | due_at           | datetime | UTC, nullable; a deadline, not a rank                     |
-| source           | text     | `email`, `call`, `self`, `agent`, `other`; default `self` |
 | created_by       | int      | FK to User, the creator                                   |
-| created_at       | datetime | UTC                                                       |
+| created_at       | datetime | UTC, set by the system                                    |
 | updated_at       | datetime | UTC                                                       |
+| updated_by       | int      | FK to User, the last editor                               |
 
-`source` says where the task came from. `created_by` and `created_at` stay put for the life of the row. `updated_at` changes when the task row changes, and when a block or link on that task changes.
+`created_by` and `created_at` stay put for the life of the row. `created_by` together with that user's `is_agent` says whether an agent or the person created the task. `updated_at` and `updated_by` change when the task row changes, and when a block on that task changes. `updated_by` is the acting user. On create it is the same user as `created_by`. Adding or releasing a block does not write a history snapshot.
 
-Completing a parent leaves its children open. A finished task stays until it is deleted. Deleting a task deletes its children, blocks, links, and history.
+How long a task has been open is a model function, not a stored column. For a completed task it is `updated_at` minus `created_at`. For any other status it is the current UTC time minus `created_at`. A later edit of a completed task moves `updated_at`, and the span moves with it. Block intervals are not subtracted.
+
+Every nullable text column reads through `value or ""`. `None` becomes `""` before a caller or the client sees it. In v0.1 those columns are `notes` and `tags`. A test inserts a task with raw SQL, sets each of them to null, and reads them back through that path. Each read yields `""`. The insert stays outside the ORM.
+
+Completing a parent leaves its children open. A finished task stays until it is deleted.
+
+Nesting and detaching change `parent_id`. Setting it to another task nests this task under that parent. A new task may be created already nested. The cycle check walks the ancestor chain and rejects the task itself, a descendant, or a missing id. Clearing `parent_id` detaches the task and makes it a root. Children stay under the moved task, and no rows are deleted.
+
+Deleting a task removes that row. The `parent_id` cascade deletes the subtree with it, along with those tasks' blocks and history. There is no tombstone.
 
 ### Tags
 
 Tags are a filter on the task, stored in `tags`. A tag is one token and contains no spaces. `deal:chad` is a tag. Tags carry no status and no URL.
 
-On save, a helper takes the submitted string and returns the stored form: tokens separated by single spaces, trimmed, with empty tokens and duplicates removed. Order is kept. The tokens live on the task, so a later multi-user store has no shared tag catalog.
+Tag reads, and the rest of tag CRUD, go through these helpers.
 
-One helper takes a stored string and returns its tokens. The task screen and a history snapshot both display tags by passing their string to that helper. The list check uses those same tokens.
+On save, a helper takes the submitted string and returns the stored form: tokens separated by single spaces, trimmed, with empty tokens and duplicates removed. Order is kept. No tokens stores `""`. The tokens live on the task, so a later multi-user store has no shared tag catalog.
+
+On read, the tag helper takes that coerced string and returns its tokens. `""` returns no tokens. The task screen and a history snapshot both display tags by passing their value to that helper. The list check uses those same tokens.
 
 Changing `tags` is a change to the task row, so it bumps `updated_at` and writes a history snapshot.
 
-### Link
-
-| column  | type | notes                         |
-| ------- | ---- | ----------------------------- |
-| id      | int  | pk                            |
-| task_id | int  | FK to Task, ON DELETE CASCADE |
-| url     | text | required                      |
-
-A repo, pull request, or any other URL is a link. The same URL may appear more than once. Linking between tasks is by id.
+A repo, pull request, or any other URL is written in the notes. There is no link row. A task points at another task through `parent_id`.
 
 ### Block
 
-A block is a row on a task. The task is blocked while it has at least one block. Several blocks may be open, and each is released on its own. Releasing a block deletes that row. The task's status stays as it is.
+A block is a row on a task. The task is blocked while it has at least one open block. A block is open while `released_at` is empty. Several blocks may be open, and each is released on its own. Releasing a block sets `released_at` and `released_by` to the acting user and the current UTC time. The row stays. The task's status stays as it is.
 
-`reason` is one line naming what the task is waiting on and who was asked. A due date can pass while a block is open.
+`reason` is one line naming what the task is waiting on and who was asked. A due date can pass while a block is open. An open block is the record an agent uses to bump the user, or to draft a follow-up to the person being waited on.
 
-| column     | type     | notes                         |
-| ---------- | -------- | ----------------------------- |
-| id         | int      | pk                            |
-| task_id    | int      | FK to Task, ON DELETE CASCADE |
-| reason     | text     | required                      |
-| created_by | int      | FK to User                    |
-| created_at | datetime | UTC                           |
+| column      | type     | notes                              |
+| ----------- | -------- | ---------------------------------- |
+| id          | int      | pk                                 |
+| task_id     | int      | FK to Task, ON DELETE CASCADE      |
+| reason      | text     | required                           |
+| created_by  | int      | FK to User                         |
+| created_at  | datetime | UTC                                |
+| released_by | int      | FK to User, nullable, set on release |
+| released_at | datetime | UTC, nullable, set on release      |
 
 ### History
 
 `HistoryBase` holds the columns every history table extends. `TaskHistory` adds `task_id` and is stored as `task_history`. In the row below, `id`, `user_id`, `created_at`, and `state` come from `HistoryBase`. `@history(TaskHistory)` on Task writes the rows. A later audited model extends `HistoryBase` and adds its own foreign key.
 
-Block, Link, and User rows are themselves the record of being added or removed.
+A block row is the record of the wait and of its release. User rows are kept.
 
 | column     | type     | notes                         |
 | ---------- | -------- | ----------------------------- |
@@ -118,57 +144,59 @@ Block, Link, and User rows are themselves the record of being added or removed.
 
 Index `(task_id, created_at)`.
 
-For a task, `state` holds `parent_id`, `title`, `notes`, `tags`, `status`, `value_tier`, `estimate_minutes`, `due_at`, and `source`. `parent_id` in `state` is a plain number, so deleting some other task leaves old snapshots alone. The recorder leaves out `id`, `created_by`, `created_at`, and `updated_at`.
+For a task, `state` holds `parent_id`, `title`, `notes`, `tags`, `status`, `estimate_minutes`, and `due_at`. `parent_id` in `state` is a plain number, so deleting some other task leaves old snapshots alone. The recorder leaves out `id`, `created_by`, `created_at`, `updated_at`, and `updated_by`. `created_at` on a history row is when the system saved that snapshot. `user_id` on that row is the editor of that snapshot.
 
 Create writes the first snapshot. An update writes another only when one of those fields changed. The snapshot is the state being saved. The previous row is the prior state, and a diff is those two documents. After a successful commit, the newest row matches the live task.
 
 The history insert and the task write are one transaction. A rollback or a failed commit drops both, and the stored task stays as it was.
 
-## Value tier
-
-`value_tier` is user-set. A task with no tier is `low`. Today is the tasks that are due or in progress, plus overdue and blocked. There is no stored top-three, rank, or strategic flag.
-
-A model may suggest a tier later. That path is unused, and no source for the tier is stored. A tier change is a history row.
-
 ## Lists
 
-`list_tasks`, the task list, today, stale items, and the daily summary load one working set, then filter and order it in the service. The query loads the account's tasks. Once more than one user exists, it loads that user's tasks. Status, tier, due date, text, and tags are applied in Python on that set. Each check takes the field value and the requested value. The tag check uses the shared token helper on the task's stored string. A tag matches a whole token. `deal` does not match `deal:chad`. Order is `high`, then `low`, then `maintenance`, then due date, with undated tasks after dated ones.
+`list_tasks`, the task list, today, stale items, and the daily summary load one working set, then filter and order it in the service. The query loads tasks whose `created_by` is in the account set. Status, due date, text, and tags are applied in Python on that set. Each check takes the field value and the requested value. The tag check uses the shared token helper on the task's stored string. A tag matches a whole token. `deal` does not match `deal:chad`. Order is due date, with undated tasks after dated ones.
 
 `list_tasks` takes `parent` and `tree`. `tree` is a bool and defaults to false. False returns one level: roots when `parent` is empty, and the direct children of `parent` when it is set. True returns every task under `parent`, and every task when `parent` is empty. The parent row itself stays on `get_task`. Each returned row includes `parent_id`, and the caller nests the rows. The checks above apply to the rows that walk returned. A search of every level sets `tree`. On the REST route the query value is the string `0` or `1`, mapped to false and true. MCP passes the bool. Today, stale items, and the daily summary load the whole working set and take no `tree` argument.
 
-`get_task` stays a lookup by id. When time entries exist, an hours report sums in the query.
+`get_task` stays a lookup by id inside the account set.
 
 ## MCP tools
 
 Hand-written tools over the same service functions as REST. Descriptions are written for agents. Responses stay compact.
 
-The acting user is the User on the write. `get_task` returns the task, its tags, links, open blocks, and history.
+The acting user is the user on the session. `get_task` returns the task, its tags, open blocks, and history.
+
+Only the person's session can add an agent or issue a token.
+
+- `add_agent(name)` creates an agent user. `password_hash` is null. The new id joins the account's session caches.
+- `issue_agent_token(name)` stores an agent token for that user and returns the raw secret once.
+
+An agent presents that token to MCP. The server hashes it, finds the agent, mints a session, caches the account set under the session token, and returns the session token. Later MCP calls present the session token. The agent token is accepted only for that exchange. Stdio and streamable HTTP use the same exchange.
 
 Block tools, for an agent or for the user:
 
 - `apply_block(task_id, reason)` when an outbound email, or any other request, leaves the task waiting on someone. `reason` names what was asked and who was asked. Status does not change.
-- `release_block(block_id)` deletes that row. Status does not change.
+- `release_block(block_id)` sets `released_at` and `released_by`. The row stays. Status does not change.
 
 `daily_summary` uses "blocked" for tasks that have an open block.
 
 Task reads and writes that already fit this schema:
 
-- `list_tasks(filters: status, tier, tags, due_before, text, parent, tree=false)`
+- `list_tasks(filters: status, tags, due_before, text, parent, tree=false)`
 - `get_task(id)`
 - `stale_items(days=7)`: open tasks whose `updated_at` is older than N days, plus overdue
 - `daily_summary(date=today PT)`: due, in progress, overdue, blocked
-- `create_task(...)`, `update_task(id, ...)`, `set_status(id, status)`, `set_due(id, due_at)`
+- `create_task(...)`, `update_task(id, ...)`, `set_status(id, status)`, `set_due(id, due_at)`. `update_task` sets `parent_id` to nest and clears it to detach. Children stay with the task.
 
 ## REST API
 
-The same service functions under `/api`. Report routes that need time or goals wait on those models.
+The same service functions under `/api`.
 
 ## UI (v0.1)
 
 - Today: due, overdue, in progress, blocked, quick add.
-- Task list: roots, then direct children, one level per read. A filter search sets `tree`. Filters for status, tier, and tag.
-- Task detail: notes, tags, links, open blocks, history, estimate.
-- Reports wait on the time model. Manifest and Pi deploy stay in v0.1.
+- Task list: roots, then direct children, one level per read. A filter search sets `tree`. Filters for status and tag. Nest a task under another, or detach it to a root. Children move with it.
+- Task detail: notes, tags, open blocks, history, estimate.
+- A person or an agent is shown by name. The browser does not store user ids.
+- Manifest and Pi deploy stay in v0.1.
 
 ## Agent consumers
 
@@ -179,31 +207,30 @@ Coach and Software are optional clients. The core loop never calls them or waits
 
 ## Milestones
 
-1. Settled models, Alembic migration, shared service layer, `@history`, tests for cascade delete and history.
-2. MCP server at `/mcp` and auth middleware. Verify with MCP Inspector and over stdio.
+1. Settled models, Alembic migration, shared service layer, `@history`, tests for cascade delete, history, and a raw-SQL null read of nullable text columns.
+2. MCP server at `/mcp`, login, and the agent-token exchange. Verify with MCP Inspector and over stdio.
 3. React UI: Today, list, task detail.
-4. Reports once time is specified, web manifest, systemd deploy to the Pi.
-5. Optional: per-agent tokens and scopes; public demo page on avenida.ai.
+4. Web manifest and systemd deploy to the Pi.
+5. Optional: public demo page on avenida.ai.
 
 ## Not redrawn yet
 
-These stayed in the original sketch when tasks collapsed to one table. When time entries exist, deleting a task deletes the time logged on it.
+These stayed in the original sketch when tasks collapsed to one table.
 
-- **Goal**: id, title, description, period (for example `2026-Q4`), status, created_at.
-- **TimeEntry**: id, task_id, category, started_at, ended_at, note, created_by. A running timer is an entry with no end. `actual_minutes` is the sum of entries. Categories are free-form strings.
 - **Comment**: id, task_id, body, created_by, created_at. A comment bumps the task's `updated_at`.
 
-Tools and screens that depend on them, and are not part of the settled list above: `time_report`, `weekly_goal_rollup`, `start_timer`, `stop_timer`, `log_time`, `add_comment`, hours-by-tier on the daily summary, and a weekly review of anything like tier overrides.
+Tools and screens that depend on them, and are not part of the settled list above: `add_comment`.
 
 ## Out of scope for v0.1
 
-Multi-user, public hosting, notifications, recurring tasks, mobile app, desktop wrapper.
+Multi-user, public hosting, notifications, recurring tasks, mobile app, desktop wrapper. A `source` field for where a task came from, such as email or a call. Prioritization as a whole, including `value_tier`, rank, and a stored top-three. Goal, until that object has been reviewed for inclusion. Time entries, including timers and an hours report.
 
 ## Notes for the builder
 
 - Keep MCP tools and REST routes as thin wrappers over one shared service layer.
 - Table models use `table=True`. Response and report shapes are separate SQLModel classes.
 - `HistoryBase` is not a table. `state` needs `sa_type=JSON`.
-- The recorder reads the acting user from the session and writes history in that same transaction.
-- Seed one User row for the account with `is_agent` false. Do not default `created_by` to a string.
+- The recorder reads the acting user from the session cache and writes history in that same transaction. The cache holds the account set, keyed by the session token, and CRUD checks those ids.
+- Seed one User row for the account with `is_agent` false. When that row has no `password_hash`, hash `BARRELVAULT_PASSWORD` into it with `pwdlib` and Argon2. Do not store the plaintext. Do not default `created_by` to a string.
+- `pwdlib[argon2]` hashes the person's password. Agent and session secrets are stored as SHA-256. The user check is a database constraint, tested from both directions.
 - Do not create `barrelvault.db` until the database code needs it.

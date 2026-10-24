@@ -4,10 +4,9 @@ Personal productivity tracker. The product draft is [SPEC.md](SPEC.md).
 
 ## Environment
 
-| name                   | required | purpose                                                                                 |
-| ---------------------- | -------- | --------------------------------------------------------------------------------------- |
-| `BARRELVAULT_DB`       | no       | SQLite path. Default `backend/barrelvault.db`. On the Pi, a path outside the checkout. |
-| `BARRELVAULT_PASSWORD` | yes      | Hashed into the seeded person's `password_hash` when that row has none.                |
+| name             | required | purpose                                                                                |
+| ---------------- | -------- | -------------------------------------------------------------------------------------- |
+| `BARRELVAULT_DB` | no       | SQLite path. Default `backend/barrelvault.db`. On the Pi, a path outside the checkout. |
 
 ## Database
 

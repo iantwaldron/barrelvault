@@ -2,10 +2,6 @@
 
 Personal productivity tracker. User and optional agents share one store. The app works with no agent connected.
 
-## Status of this draft
-
-This document is the v0.1 contract. The data model and auth review is settled. Milestone 5, the public demo page, stays optional.
-
 ## Stack and layout
 
 Python dependencies are listed in [backend/requirements.txt](backend/requirements.txt).
@@ -15,7 +11,7 @@ Python dependencies are listed in [backend/requirements.txt](backend/requirement
 | `backend/`  | FastAPI application       |
 | `frontend/` | React + Vite + TypeScript |
 
-The frontend client is generated from the API's OpenAPI schema with `openapi-typescript`. v0.1 includes a web app manifest and icons so Safari can add the app to the Dock. `frontend/` is empty so far.
+The frontend client is generated from the API's OpenAPI schema with `openapi-typescript`. v0.1 includes a web app manifest and icons so Safari can add the app to the Dock.
 
 One FastAPI process serves the HTTP routes. MCP also runs over stdio for local development.
 
@@ -226,7 +222,6 @@ The same service functions under `/api`.
 - Task detail: notes, tags, open blocks, history, estimate.
 - A person or an agent is shown by name. The browser does not store user ids.
 - Deleting an agent with nothing attached removes it. Deleting one with attached rows asks the person to reassign those rows to themselves, or to retire the agent and keep its name on them. Reassign says that the agent's name will disappear from those rows.
-- Manifest and Pi deploy stay in v0.1.
 
 ## Agent consumers
 
@@ -237,23 +232,15 @@ Coach and Software are optional clients. The core loop never calls them or waits
 
 ## Milestones
 
-1. Settled models, Alembic migration, shared service layer, `@history`, tests for cascade delete, history, and a raw-SQL null read of nullable text columns.
+1. Models, Alembic migration, shared service layer, `@history`, tests for cascade delete, history, and a raw-SQL null read of nullable text columns.
 2. MCP server at `/mcp`, login, and the agent-token exchange. Verify with MCP Inspector and over stdio.
 3. React UI: Today, list, task detail.
 4. Web manifest and systemd deploy to the Pi.
 5. Optional: public demo page on avenida.ai.
 
-## Not redrawn yet
-
-These stayed in the original sketch when tasks collapsed to one table.
-
-- **Comment**: id, task_id, body, created_by, created_at. A comment bumps the task's `updated_at`.
-
-Tools and screens that depend on them, and are not part of the settled list above: `add_comment`.
-
 ## Out of scope for v0.1
 
-Multi-user, public hosting, notifications, recurring tasks, mobile app, desktop wrapper. A `source` field for where a task came from, such as email or a call. Prioritization as a whole, including `value_tier`, rank, and a stored top-three. Goal, until that object has been reviewed for inclusion. Time entries, including timers and an hours report.
+Multi-user, public hosting, notifications, recurring tasks, mobile app, desktop wrapper. A `source` field for where a task came from, such as email or a call. Prioritization as a whole, including `value_tier`, rank, and a stored top-three. Goal and comments. Time entries, including timers and an hours report.
 
 ## Notes for the builder
 

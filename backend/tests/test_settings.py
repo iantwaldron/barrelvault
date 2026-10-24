@@ -1,0 +1,47 @@
+import pytest
+
+from barrelvault.settings import (
+    DEFAULT_DB_PATH,
+    DEFAULT_SESSION_LENGTH,
+    SettingsError,
+    load_settings,
+)
+
+
+def test_defaults_when_unset():
+    settings = load_settings({})
+    assert settings.db_path == DEFAULT_DB_PATH
+    assert settings.session_length == DEFAULT_SESSION_LENGTH
+    assert DEFAULT_SESSION_LENGTH == 604800
+
+
+def test_blank_values_use_defaults():
+    settings = load_settings(
+        {"BARRELVAULT_DB": "  ", "BARRELVAULT_SESSION_LENGTH": " "}
+    )
+    assert settings.db_path == DEFAULT_DB_PATH
+    assert settings.session_length == DEFAULT_SESSION_LENGTH
+
+
+def test_overrides():
+    settings = load_settings(
+        {
+            "BARRELVAULT_DB": "/var/lib/barrelvault.db",
+            "BARRELVAULT_SESSION_LENGTH": "3600",
+        }
+    )
+    assert settings.db_path == "/var/lib/barrelvault.db"
+    assert settings.session_length == 3600
+
+
+def test_reads_process_environment(monkeypatch):
+    monkeypatch.delenv("BARRELVAULT_DB", raising=False)
+    monkeypatch.delenv("BARRELVAULT_SESSION_LENGTH", raising=False)
+    monkeypatch.setenv("BARRELVAULT_SESSION_LENGTH", "90")
+    assert load_settings().session_length == 90
+
+
+@pytest.mark.parametrize("raw", ["0", "-5", "nope", "1.5"])
+def test_bad_session_length_is_refused(raw):
+    with pytest.raises(SettingsError):
+        load_settings({"BARRELVAULT_SESSION_LENGTH": raw})

@@ -1,0 +1,1 @@
+"""Barrelvault application package."""

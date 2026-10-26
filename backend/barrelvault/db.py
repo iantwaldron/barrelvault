@@ -60,3 +60,10 @@ def get_session() -> Iterator[Session]:
     """Yield the database session for one request."""
     with open_session() as session:
         yield session
+
+
+def apply_migrations() -> None:
+    """Create any missing tables."""
+    from barrelvault import models
+
+    models.SQLModel.metadata.create_all(get_engine())

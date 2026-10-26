@@ -50,7 +50,7 @@ The account is the human and every agent whose `owner_id` is that human's user i
 | email         | text | unique; login matches this            |
 | password_hash | text | Argon2 hash of the person's password  |
 
-A setup command creates the account. The command is `python -m barrelvault.cli setup`. It applies the migrations, then prompts for the name, the email, and the password twice. The password is read with echo off. It is not a command argument and it is not read from the environment. It is hashed with `pwdlib` and Argon2. The plaintext is not stored. The command writes one User and one Human. A second human is refused. That command is the only path that creates the human account. No session can create a Human.
+A setup command creates the account. The command is `python -m barrelvault.cli setup`. It applies the migrations, then checks the user table. Any row means an account already exists: the command prints a message and exits. Otherwise it prompts for the name, the email, and the password twice. The two passwords must match. The password is read with echo off. It is not a command argument and it is not read from the environment. It is hashed with `pwdlib` and Argon2. The plaintext is not stored. The command writes one User and one Human. A second human is refused. That command is the only path that creates the human account. No session can create a Human.
 
 ### Agent
 

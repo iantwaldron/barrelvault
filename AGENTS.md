@@ -4,8 +4,9 @@
 
 ## Working rules
 
-- Change only what the current task needs. Leave SPEC.md "Out of scope" items alone unless the spec is updated.
-- Implement behavior once, in a shared service layer. MCP tools and `/api` routes stay thin wrappers over that layer.
-- Python lives in `backend/`. Use a stdlib virtualenv named `env` at `backend/env`. It is gitignored.
+- Change only what the current task needs.
+- Assume multi-tenancy. A single-tenant path hides a cross-account hole, so tests create a second tenant and refuse that access. SPEC.md defines the account boundary.
+- Implement behavior once, in a shared service layer.
+- Use a stdlib virtualenv named `env` at `backend/env`. It is gitignored.
 - Do not commit `.env` or `*.db`.
 - When testing a model, insert nulls for nullable text columns with raw SQL, then read them back through the service. An ORM insert applies the default and hides the null the test is there to catch.

@@ -1,0 +1,150 @@
+"""Passwords, session minting, and the session check."""
+
+import hashlib
+from datetime import UTC, datetime
+
+from pwdlib import PasswordHash
+from sqlalchemy import event, inspect
+from sqlalchemy.orm import Session as OrmSession
+from sqlmodel import Session, select
+
+from barrelvault.models import Agent, Human, Token, User
+from barrelvault.settings import load_settings
+
+_passwords = PasswordHash.recommended()
+_DUMMY_PASSWORD_HASH = _passwords.hash("barrelvault-password-check")
+
+
+class ServiceError(Exception):
+    """A refused account, agent, or session write."""
+
+
+def hash_password(password: str) -> str:
+    return _passwords.hash(password)
+
+
+def install_guard(session: Session) -> None:
+    if session.info.get("auth_guard"):
+        return
+    session.info["auth_guard"] = True
+    event.listen(session, "before_flush", _guard_flush)
+
+
+def login(session: Session, email: str, password: str) -> str:
+    install_guard(session)
+    human = session.exec(select(Human).where(Human.email == email)).one_or_none()
+    stored = human.password_hash if human is not None else _DUMMY_PASSWORD_HASH
+    password_matches = _passwords.verify(password, stored)
+    if human is None or not password_matches:
+        raise ServiceError("refused")
+    return _mint(session, human.user_id)
+
+
+def exchange_key(session: Session, key: str) -> str:
+    install_guard(session)
+    if _blank(key):
+        raise ServiceError("refused")
+    agent = session.exec(select(Agent).where(Agent.key_hash == _digest(key))).one_or_none()
+    if agent is None or agent.retired_at is not None:
+        raise ServiceError("refused")
+    if agent.key_expires_at is None or _as_utc(agent.key_expires_at) <= datetime.now(UTC):
+        raise ServiceError("refused")
+    return _mint(session, agent.user_id)
+
+
+def authenticate(session: Session, secret: str) -> User:
+    """Accept a session secret. This is the only check later calls use."""
+    install_guard(session)
+    if _blank(secret):
+        raise ServiceError("refused")
+    token = session.exec(select(Token).where(Token.secret_hash == _digest(secret))).one_or_none()
+    if token is None or _as_utc(token.expires_at) <= datetime.now(UTC):
+        raise ServiceError("refused")
+    user = session.get(User, token.user_id)
+    if user is None:
+        raise ServiceError("refused")
+    agent = session.get(Agent, user.id)
+    if agent is not None and _agent_key_is_dead(agent):
+        # The refusal must keep the delete when the caller rolls the request back.
+        session.delete(token)
+        session.commit()
+        raise ServiceError("refused")
+    return user
+
+
+def logout(session: Session, secret: str) -> None:
+    install_guard(session)
+    if _blank(secret):
+        return
+    token = session.exec(select(Token).where(Token.secret_hash == _digest(secret))).one_or_none()
+    if token is not None:
+        session.delete(token)
+        session.flush()
+
+
+def save_session(session: Session, token: Token) -> None:
+    """Flush an existing session. A missing or edited expiry, hash, or user is refused."""
+    install_guard(session)
+    if not inspect(token).persistent:
+        raise ServiceError("refused")
+    session.flush()
+
+
+def delete_session(session: Session, user_id: int) -> None:
+    token = session.exec(select(Token).where(Token.user_id == user_id)).one_or_none()
+    if token is not None:
+        session.delete(token)
+
+
+def _mint(session: Session, user_id: int) -> str:
+    install_guard(session)
+    load_settings()
+    existing = session.exec(select(Token).where(Token.user_id == user_id)).one_or_none()
+    if existing is not None:
+        session.delete(existing)
+        session.flush()
+    token = Token(user_id=user_id)
+    raw = token.generate_secret()
+    if token.expires_at is None:
+        raise ServiceError("refused")
+    session.add(token)
+    session.flush()
+    return raw
+
+
+def _guard_flush(session: OrmSession, _flush_context: object, _instances: object) -> None:
+    for obj in session.new:
+        if isinstance(obj, Token) and obj.expires_at is None:
+            raise ServiceError("refused")
+    for obj in session.dirty:
+        if isinstance(obj, Token):
+            _guard_token(obj)
+
+
+def _guard_token(token: Token) -> None:
+    if token.expires_at is None:
+        raise ServiceError("refused")
+    state = inspect(token)
+    for name in ("expires_at", "secret_hash", "user_id"):
+        if state.attrs[name].history.has_changes():
+            raise ServiceError("refused")
+
+
+def _agent_key_is_dead(agent: Agent) -> bool:
+    if agent.key_hash is None or agent.key_expires_at is None:
+        return True
+    return _as_utc(agent.key_expires_at) <= datetime.now(UTC)
+
+
+def _digest(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+def _blank(value: str | None) -> bool:
+    return value is None or value.strip() == ""
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)

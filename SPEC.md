@@ -1,10 +1,10 @@
 # Barrelvault v0.1 spec
 
-Personal productivity tracker. User and optional agents share one store. The app works with no agent connected.
+A task management system where a person and their agents collaborate.
 
 ## Stack and layout
 
-Python dependencies are listed in [backend/requirements.txt](backend/requirements.txt).
+Python dependencies are listed in [backend/requirements.txt](backend/requirements.txt). Development dependencies are listed in [backend/requirements.dev.txt](backend/requirements.dev.txt).
 
 | path        | role                      |
 | ----------- | ------------------------- |
@@ -13,22 +13,21 @@ Python dependencies are listed in [backend/requirements.txt](backend/requirement
 
 The frontend client is generated from the API's OpenAPI schema with `openapi-typescript`. v0.1 includes a web app manifest and icons so Safari can add the app to the Dock.
 
-One FastAPI process serves the HTTP routes. MCP also runs over stdio for local development.
+One FastAPI process serves the HTTP routes.
 
-| route   | serves                 |
-| ------- | ---------------------- |
-| `/`     | built frontend         |
-| `/api`  | REST                   |
-| `/mcp`  | MCP, streamable HTTP   |
-| `stdio` | MCP, local development |
+| route  | serves               |
+| ------ | -------------------- |
+| `/`    | built frontend       |
+| `/api` | REST                 |
+| `/mcp` | MCP, streamable HTTP |
 
 ## Database file
 
-The file is `barrelvault.db`. It is created when the database code needs it. The path is in the [environment list](README.md#environment).
+The file is `barrelvault.db`. It is created when the database code needs it. The path is in the [environment list](README.md#environment). `backend/barrelvault/settings.py` is the only reader of environment variables, and it applies the defaults.
 
 ## Data model
 
-The models are User, Human, Agent, Token, Task, Block, and TaskHistory. Tags are a field on Task.
+The models are User, Human, Agent, Token, Task, Block, and TaskHistory. Tags are a field on Task. Table models use `table=True`.
 
 ### User
 
@@ -38,6 +37,8 @@ The models are User, Human, Agent, Token, Task, Block, and TaskHistory. Tags are
 | name   | text | unique |
 
 User is the actor. Human and Agent are profiles, one each to a User. The profile stores `user_id` as its primary key and as a foreign key to User. A user has one profile. The acting user is the user on the session.
+
+The profile is the user's type, and the type is fixed. The service refuses a change that makes a human user an agent or an agent user a human. That includes replacing the profile and adding the other profile beside it. Retire and reassign do not convert the remaining user. Tests refuse each direction: replacing a Human profile with an Agent profile, replacing an Agent profile with a Human profile, adding an Agent profile to a human user, and adding a Human profile to an agent user.
 
 The account is the human and every agent whose `owner_id` is that human's user id. Those agents are a model function on the human: the `Agent` rows with that `owner_id`, including retired agents. Task reads do not call it. A task belongs to the account when `owned_by` is that human's user id. `created_by` records who acted. The client does not send a user id. A response names a person or an agent, and it does not carry a user id.
 
@@ -49,46 +50,56 @@ The account is the human and every agent whose `owner_id` is that human's user i
 | email         | text | unique; login matches this            |
 | password_hash | text | Argon2 hash of the person's password  |
 
-An enrollment command creates the person. It prompts for the name, the email, and the password twice. The password is read with echo off and is not a command argument. It is hashed with `pwdlib` and Argon2. The plaintext is not stored. The command writes one User and one Human. A second human is refused.
+An enrollment command creates the person. The command is `python -m barrelvault.cli create-user`. It applies the migrations, then prompts for the name, the email, and the password twice. The password is read with echo off. It is not a command argument and it is not read from the environment. It is hashed with `pwdlib` and Argon2. The plaintext is not stored. The command writes one User and one Human. A second human is refused. That command is the only path that creates the human account. No session can create a Human.
 
 ### Agent
 
-| column     | type     | notes                                        |
-| ---------- | -------- | -------------------------------------------- |
-| user_id    | int      | pk, FK to User                               |
-| owner_id   | int      | FK to User, the human this agent belongs to  |
-| retired_at | datetime | UTC, nullable; set when the agent is retired |
+| column         | type     | notes                                              |
+| -------------- | -------- | -------------------------------------------------- |
+| user_id        | int      | pk, FK to User                                     |
+| owner_id       | int      | FK to User, the human this agent belongs to        |
+| key_hash       | text     | nullable; SHA-256 of the API key                   |
+| key_expires_at | datetime | UTC, nullable; set with the key; empty with no key |
+| retired_at     | datetime | UTC, nullable; set when the agent is retired       |
 
-`owner_id` points at the human's user id. Many agents point at one human. An empty `retired_at` means the agent can act. A set `retired_at` means the person retired it. A retired agent stays in the account, its existing rows stay visible, and it cannot sign in or receive a new token.
+`owner_id` points at the human's user id. Many agents point at one human. An empty `retired_at` means the agent can act. A set `retired_at` means the person retired it. A retired agent stays in the account, its existing rows stay visible, and it cannot exchange a key or receive a new one.
 
-Only the person's session can delete an agent. Attached data is any task, block, or history row that points at the agent's user id. Tokens do not count.
+`key_hash` is empty until the person issues a key. The raw key is shown once and is not stored. A model method on Agent generates it. The method reads at least 32 bytes from a cryptographic random source, stores the SHA-256 in `key_hash`, sets `key_expires_at` from the key length, and returns the raw key. The caller does not supply the secret. Issuing sets `key_hash` and `key_expires_at`. The service sets `key_expires_at` to the mint time plus the key length from settings. `BARRELVAULT_KEY_LENGTH` is that length in seconds. When it is unset or blank, the length is 31536000, which is 365 days. A value that is present and is not a positive integer is refused when settings load. Rolling replaces both, and the old key dies in that write. The same write deletes that agent's session row. One key is live. The caller does not send `key_expires_at`. The response that shows the raw key also shows `key_expires_at`. The exchange refuses a key whose `key_expires_at` is in the past. The service rejects a `key_hash` with an empty `key_expires_at`, a `key_expires_at` with an empty `key_hash`, and a change to `key_expires_at` outside issue, roll, and retire. Tests cover an issue that stores `key_expires_at` as the mint time plus the configured key length, a roll that replaces it, an unset length of 31536000, a length that is not a positive integer refused when settings load, an exchange of an expired key, a `key_hash` with an empty `key_expires_at`, a `key_expires_at` with an empty `key_hash`, and an update that changes `key_expires_at` without a roll.
 
-When nothing is attached, the delete removes the Agent profile, its tokens, and the User row.
+Only a session whose user has the Human profile can create or change an agent. That covers add, issue, roll, retire, reassign, and delete. An agent session cannot write a User, a Human, or an Agent. Tests refuse an agent session on each of those writes, and they refuse any session that tries to create a Human. Attached data is any task, block, or history row that points at the agent's user id. The session row does not count.
+
+When nothing is attached, the delete removes the Agent profile, its session row, and the User row.
 
 When something is attached, the call does nothing until the person chooses.
 
-- Reassign moves every task, block, and history column that points at the agent onto the person's user id, then removes the Agent profile, its tokens, and the User row. Those rows then show the person's name. `owned_by` already points at the person and stays put.
-- Retire sets `retired_at` and revokes the agent's tokens. The columns that point at the agent stay. The name still shows on what it did.
+- Reassign moves every task, block, and history column that points at the agent onto the person's user id, then removes the Agent profile, its session row, and the User row. Those rows then show the person's name. `owned_by` already points at the person and stays put.
+- Retire sets `retired_at`, clears `key_hash` and `key_expires_at`, and deletes the agent's session row. The columns that point at the agent stay. The name still shows on what it did.
 
 Each path runs in one transaction. A user row that remains has one profile.
 
 ### Token
 
-A token row is a session or an agent credential. The raw secret is shown once and is not stored. The row stores the SHA-256 hash.
+A token row is a session. A user has at most one. The raw secret is shown once and is not stored. The row stores the SHA-256 hash.
 
-| column      | type     | notes                          |
-| ----------- | -------- | ------------------------------ |
-| id          | int      | pk                             |
-| user_id     | int      | FK to User                     |
-| secret_hash | text     | SHA-256 of the secret          |
-| kind        | text     | `session` or `agent`           |
-| created_at  | datetime | UTC                            |
-| expires_at  | datetime | UTC, nullable                  |
-| revoked_at  | datetime | UTC, nullable                  |
+| column      | type     | notes                                       |
+| ----------- | -------- | ------------------------------------------- |
+| id          | int      | pk                                          |
+| user_id     | int      | unique; FK to User                          |
+| secret_hash | text     | unique; SHA-256 of the secret               |
+| created_at  | datetime | UTC, set by the system                      |
+| expires_at  | datetime | UTC, set at mint; not nullable; not updated |
 
-A session row expires. An agent token lasts until it is revoked. A revoked token does not exchange.
+A session expires. The service sets `expires_at` to the mint time plus the session length from settings. `BARRELVAULT_SESSION_LENGTH` is that length in seconds. When it is unset or blank, the length is 604800, which is 7 days. A value that is present and is not a positive integer is refused when settings load. The caller does not send `expires_at`. The service rejects a session whose `expires_at` is missing, and it rejects an update that changes `expires_at`, `secret_hash`, or `user_id`.
 
-The person's login matches `email` and `password_hash` on Human and mints a session. The browser receives that session in an `HttpOnly` cookie. An agent does not log in with a password. The session identifies the acting user. It does not carry the account or a list of agent ids.
+Two paths mint a session, and nothing else does. Login matches `email` and `password_hash` on Human and writes that human's user id on the session. A wrong email and a wrong password are the same failure, and the password check runs in both cases. Neither mints a session. The agent exchange hashes the presented key, matches `Agent.key_hash`, and writes that agent's user id on the session. It refuses a retired agent, an empty `key_hash`, and an expired key. A session secret is not accepted on either path. A successful mint deletes that user's existing session row, if one exists, and inserts the new row in the same transaction. A model method on Token generates the secret from at least 32 bytes of cryptographic randomness. The insert stores that new secret. It does not update the old row. The caller does not supply the secret. After the transaction commits, that user has one session row. A refused mint deletes nothing. If the insert does not commit, the previous row stays. A committed state never has two session rows for one user.
+
+Rolling a key deletes that agent's session row in the same transaction. Retire does too. The person's session belongs to a different user and stays.
+
+The person's browser receives that session in a cookie that is `HttpOnly` and `SameSite=Lax`. The cookie is `Secure` when the scheme is HTTPS. Logout deletes that user's session row and clears the cookie. It does not write a new session. An agent receives the session token from the exchange and presents it on later calls. An agent does not log in with a password. The session identifies the acting user. It does not carry the account, a list of agent ids, or which path granted it. A later call accepts that session and refuses the API key.
+
+Every later call on `/api` and `/mcp` validates the presented session with one function, and with no other. The function takes only the presented secret. The acting user is the user on the one row whose `secret_hash` matches. The secret is accepted only when `expires_at` is in the future. No matching row is a refusal. A different user's session does not affect it. When the matched user is an agent whose key is missing or past `key_expires_at`, the function deletes that session and refuses. A person's session is not deleted for that reason.
+
+Tests cover a login with the person's password, a wrong password, an exchange with the live key, an exchange after that key was rolled, an empty `key_hash`, a retired agent, and a session secret presented to either path. Login stores the human's user id. The exchange stores the agent's user id. Both mint paths store `expires_at` as the mint time plus the configured session length. An unset length uses 604800. A length that is not a positive integer is refused when settings load. A session write with no `expires_at` is refused, and an update that changes `expires_at`, `secret_hash`, or `user_id` is refused. The check is called with the presented secret alone. A secret that matches no row is refused. The first mint for a user, with no prior row, leaves one row. A second successful mint for the same user leaves one row. The earlier secret matches no row while that expiry is still in the future, and the new secret is accepted. A refused mint leaves the existing row, and its secret is still accepted. That includes a wrong password, a session secret presented to either path, an expired key, an empty `key_hash`, a retired agent, and a write with no `expires_at`. A mint whose insert does not commit leaves the previous row, and its secret is still accepted. Two overlapping mints for the same user leave one row, and only one of the two secrets is accepted. A raw insert of a second row for the same `user_id` is refused, and the first row stays. A second mint for another user leaves both rows, one each, and the first user's secret is still accepted. An expired session is refused and is still that user's only row. A later successful mint replaces it and leaves one row, and the expired secret matches nothing. A roll deletes the agent's session row and leaves the person's session row. The agent's previous secret matches nothing. A roll with no session row leaves the agent with none. The exchange after that roll creates one row. Retire deletes the agent's session row, and that secret matches nothing. A later call with an expired session is refused, and a later call with the API key is refused. A wrong email leaves no session, the same as a wrong password. Logout deletes the row and does not insert another. An agent session whose key is past `key_expires_at`, or whose key is missing, is deleted and refused. The person's session row stays.
 
 ### Task
 
@@ -110,7 +121,7 @@ A task may contain tasks, with the same fields at every depth. An empty `parent_
 | updated_by       | int      | FK to User, the last editor                               |
 | owned_by         | int      | FK to User, the human who owns the task                   |
 
-`owned_by` is set once at create and stays put. The person stores their own user id. An agent stores its `owner_id`. `created_by` and `created_at` stay put for the life of the row. A Human profile on `created_by` means the person created the task. An Agent profile means an agent created it. `updated_at` and `updated_by` change when the task row changes, and when a block on that task changes. `updated_by` is the acting user. On create it is the same user as `created_by`. Adding or releasing a block does not write a history snapshot.
+`owned_by` is set once at create and stays put. The person stores their own user id. An agent stores its `owner_id`. The service rejects a write whose `owned_by` is not the human's user id. Tests cover a create by the person, a create by an agent, an `owned_by` set to an agent id, an `owned_by` set to an id that is not the human, and an update that tries to change `owned_by`. `created_by` and `created_at` stay put for the life of the row. `created_by` is the acting user's id. Do not default it to a string. A Human profile on `created_by` means the person created the task. An Agent profile means an agent created it. `updated_at` and `updated_by` change when the task row changes, and when a block on that task changes. `updated_by` is the acting user. On create it is the same user as `created_by`. Adding or releasing a block does not write a history snapshot.
 
 How long a task has been open is a model function, not a stored column. For a completed task it is `updated_at` minus `created_at`. For any other status it is the current UTC time minus `created_at`. A later edit of a completed task moves `updated_at`, and the span moves with it. Block intervals are not subtracted.
 
@@ -154,7 +165,7 @@ A block is a row on a task. The task is blocked while it has at least one open b
 
 ### History
 
-`HistoryBase` holds the columns every history table extends. `TaskHistory` adds `task_id` and is stored as `task_history`. In the row below, `id`, `user_id`, `created_at`, and `state` come from `HistoryBase`. `@history(TaskHistory)` on Task writes the rows. A later audited model extends `HistoryBase` and adds its own foreign key.
+`HistoryBase` holds the columns every history table extends. It is not a table. `state` uses `sa_type=JSON`. `TaskHistory` adds `task_id` and is stored as `task_history`. In the row below, `id`, `user_id`, `created_at`, and `state` come from `HistoryBase`. `@history(TaskHistory)` on Task writes the rows. A later audited model extends `HistoryBase` and adds its own foreign key.
 
 A block row is the record of the wait and of its release. A history row keeps its editor id. Reassigning an agent moves that id to the person before the user row is deleted. Retiring an agent leaves the id in place.
 
@@ -174,80 +185,6 @@ Create writes the first snapshot. An update writes another only when one of thos
 
 The history insert and the task write are one transaction. A rollback or a failed commit drops both, and the stored task stays as it was.
 
-## Lists
-
-`list_tasks`, the task list, today, stale items, and the daily summary load one working set, then filter and order it in the service. The query loads tasks whose `owned_by` is the human's user id. Status, due date, text, and tags are applied in Python on that set. Each check takes the field value and the requested value. The tag check uses the shared token helper on the task's stored string. A tag matches a whole token. `deal` does not match `deal:chad`. Order is due date, with undated tasks after dated ones.
-
-`list_tasks` takes `parent` and `tree`. `tree` is a bool and defaults to false. False returns one level: roots when `parent` is empty, and the direct children of `parent` when it is set. True returns every task under `parent`, and every task when `parent` is empty. The parent row itself stays on `get_task`. Each returned row includes `parent_id`, and the caller nests the rows. The checks above apply to the rows that walk returned. A search of every level sets `tree`. On the REST route the query value is the string `0` or `1`, mapped to false and true. MCP passes the bool. Today, stale items, and the daily summary load the whole working set and take no `tree` argument.
-
-`get_task` stays a lookup by id whose `owned_by` is the human's user id.
-
-## MCP tools
-
-Hand-written tools over the same service functions as REST. Descriptions are written for agents. Responses stay compact.
-
-The acting user is the user on the session. `get_task` returns the task, its tags, open blocks, and history.
-
-Only the person's session can add an agent, issue a token, or delete an agent.
-
-- `add_agent(name)` creates a User and an Agent. `owner_id` is the acting user's id.
-- `issue_agent_token(name)` stores an agent token for that user and returns the raw secret once. It refuses a retired agent.
-- `delete_agent(name, choice)` follows the Agent delete rules. `choice` is empty, `reassign`, or `retire`. When rows are attached and `choice` is empty, the call deletes nothing and reports that a choice is required.
-
-An agent presents that token to MCP. The server hashes it, finds the Agent, refuses a retired agent, mints a session, and returns the session token. Later MCP calls present the session token. The agent token is accepted only for that exchange. Stdio and streamable HTTP use the same exchange.
-
-Block tools, for an agent or for the user:
-
-- `apply_block(task_id, reason)` when an outbound email, or any other request, leaves the task waiting on someone. `reason` names what was asked and who was asked. Status does not change.
-- `release_block(block_id)` sets `released_at` and `released_by`. The row stays. Status does not change.
-
-`daily_summary` uses "blocked" for tasks that have an open block.
-
-Task reads and writes that already fit this schema:
-
-- `list_tasks(filters: status, tags, due_before, text, parent, tree=false)`
-- `get_task(id)`
-- `stale_items(days=7)`: open tasks whose `updated_at` is older than N days, plus overdue
-- `daily_summary(date=today PT)`: due, in progress, overdue, blocked
-- `create_task(...)`, `update_task(id, ...)`, `set_status(id, status)`, `set_due(id, due_at)`. `update_task` sets `parent_id` to nest and clears it to detach. Children stay with the task.
-
-## REST API
-
-The same service functions under `/api`.
-
-## UI (v0.1)
-
-- Today: due, overdue, in progress, blocked, quick add.
-- Task list: roots, then direct children, one level per read. A filter search sets `tree`. Filters for status and tag. Nest a task under another, or detach it to a root. Children move with it.
-- Task detail: notes, tags, open blocks, history, estimate.
-- A person or an agent is shown by name. The browser does not store user ids.
-- Deleting an agent with nothing attached removes it. Deleting one with attached rows asks the person to reassign those rows to themselves, or to retire the agent and keep its name on them. Reassign says that the agent's name will disappear from those rows.
-
-## Agent consumers
-
-Coach and Software are optional clients. The core loop never calls them or waits on them.
-
-- Coach calls `daily_summary` at its 7:30 AM PT check-in.
-- Software reads `stale_items`.
-
-## Milestones
-
-1. Models, Alembic migration, shared service layer, `@history`, tests for cascade delete, history, and a raw-SQL null read of nullable text columns.
-2. MCP server at `/mcp`, login, and the agent-token exchange. Verify with MCP Inspector and over stdio.
-3. React UI: Today, list, task detail.
-4. Web manifest and systemd deploy to the Pi.
-5. Optional: public demo page on avenida.ai.
-
 ## Out of scope for v0.1
 
 Multi-user, public hosting, notifications, recurring tasks, mobile app, desktop wrapper. A `source` field for where a task came from, such as email or a call. Prioritization as a whole, including `value_tier`, rank, and a stored top-three. Goal and comments. Time entries, including timers and an hours report.
-
-## Notes for the builder
-
-- Keep MCP tools and REST routes as thin wrappers over one shared service layer.
-- Table models use `table=True`. Response and report shapes are separate SQLModel classes.
-- `HistoryBase` is not a table. `state` needs `sa_type=JSON`.
-- The recorder reads the acting user from the session and writes history in that same transaction. CRUD checks `owned_by` against the human's user id. `created_by` records the actor.
-- `python -m barrelvault.cli create-user` is the enrollment command. It is a separate entry from stdio MCP. It applies the migrations, prompts for the name, the email, and the password twice, and writes one User and one Human. It refuses when a Human already exists. Do not store the plaintext. Do not read the password from the environment or from a command argument. Do not default `created_by` to a string.
-- `pwdlib[argon2]` hashes the person's password. Agent and session secrets are stored as SHA-256. A user has one profile. An agent delete is one transaction: remove an unused agent, reassign and then remove it, or retire it.
-- Do not create `barrelvault.db` until the database code needs it.

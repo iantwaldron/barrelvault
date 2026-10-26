@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 DEFAULT_DB_PATH = "backend/barrelvault.db"
 DEFAULT_SESSION_LENGTH = 604800
+DEFAULT_KEY_LENGTH = 31536000
 
 
 class SettingsError(ValueError):
@@ -15,13 +16,23 @@ class SettingsError(ValueError):
 class Settings:
     db_path: str
     session_length: int
+    key_length: int
 
 
 def load_settings(environ: dict[str, str] | None = None) -> Settings:
     env = os.environ if environ is None else environ
     return Settings(
         db_path=_db_path(env.get("BARRELVAULT_DB")),
-        session_length=_session_length(env.get("BARRELVAULT_SESSION_LENGTH")),
+        session_length=_positive_int(
+            env.get("BARRELVAULT_SESSION_LENGTH"),
+            "BARRELVAULT_SESSION_LENGTH",
+            DEFAULT_SESSION_LENGTH,
+        ),
+        key_length=_positive_int(
+            env.get("BARRELVAULT_KEY_LENGTH"),
+            "BARRELVAULT_KEY_LENGTH",
+            DEFAULT_KEY_LENGTH,
+        ),
     )
 
 
@@ -31,17 +42,13 @@ def _db_path(raw: str | None) -> str:
     return raw
 
 
-def _session_length(raw: str | None) -> int:
+def _positive_int(raw: str | None, name: str, default: int) -> int:
     if raw is None or raw.strip() == "":
-        return DEFAULT_SESSION_LENGTH
+        return default
     try:
         length = int(raw)
     except ValueError:
-        raise SettingsError(
-            "BARRELVAULT_SESSION_LENGTH must be a positive integer"
-        ) from None
+        raise SettingsError(f"{name} must be a positive integer") from None
     if length <= 0:
-        raise SettingsError(
-            "BARRELVAULT_SESSION_LENGTH must be a positive integer"
-        )
+        raise SettingsError(f"{name} must be a positive integer")
     return length

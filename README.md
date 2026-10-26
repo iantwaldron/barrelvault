@@ -8,6 +8,7 @@ A task management system where a person and their agents collaborate. The produc
 | ---------------------------- | -------- | ------------------------------------------------------------------------------------------------------ |
 | `BARRELVAULT_DB`             | no       | SQLite path. Default `backend/barrelvault.db`. On the Pi, a path outside the checkout.                 |
 | `BARRELVAULT_SESSION_LENGTH` | no       | Session lifetime in seconds. Default 604800 (7 days). `expires_at` is the mint time plus this value.   |
+| `BARRELVAULT_KEY_LENGTH`     | no       | API key lifetime in seconds. Default 31536000 (365 days). `key_expires_at` is the mint time plus this value. |
 
 ## Database
 

@@ -3,17 +3,11 @@
 from datetime import UTC, datetime
 from typing import NamedTuple
 
-from sqlalchemy import event, inspect, text
-from sqlalchemy.orm import Session as OrmSession
+from sqlalchemy import inspect, text
 from sqlmodel import Session, select
 
-from barrelvault.auth import (
-    ServiceError,
-    authenticate,
-    delete_session,
-    hash_password,
-    install_guard,
-)
+from barrelvault.auth import ServiceError, authenticate, delete_session, hash_password
+from barrelvault.guards import KEY_WRITE
 from barrelvault.models import Agent, Human, User
 from barrelvault.settings import load_settings
 
@@ -38,7 +32,6 @@ def create_account(
     secret: str | None = None,
 ) -> Human:
     """Create the one human account. A session secret is refused."""
-    _prepare(session)
     if secret is not None:
         raise ServiceError("refused")
     if _blank(name) or _blank(email) or _blank(password):
@@ -69,7 +62,6 @@ def add_agent(session: Session, secret: str, name: str) -> Agent:
     session.flush()
     agent = Agent(user_id=user.id, owner_id=human.user_id)
     _check_owner(agent, human)
-    _check_key_pair(agent)
     session.add(agent)
     session.flush()
     return agent
@@ -83,7 +75,6 @@ def issue_key(session: Session, secret: str, agent_user_id: int) -> IssuedKey:
         raise ServiceError("refused")
     with _key_write(session, "issue"):
         raw = agent.generate_key()
-        _check_key_pair(agent)
         session.add(agent)
         session.flush()
     return IssuedKey(raw, agent.key_expires_at)
@@ -97,7 +88,6 @@ def roll_key(session: Session, secret: str, agent_user_id: int) -> IssuedKey:
         raise ServiceError("refused")
     with _key_write(session, "roll"):
         raw = agent.generate_key()
-        _check_key_pair(agent)
         delete_session(session, agent.user_id)
         session.add(agent)
         session.flush()
@@ -112,7 +102,6 @@ def retire_agent(session: Session, secret: str, agent_user_id: int) -> None:
             agent.retired_at = datetime.now(UTC)
         agent.key_hash = None
         agent.key_expires_at = None
-        _check_key_pair(agent)
         delete_session(session, agent.user_id)
         session.add(agent)
         session.flush()
@@ -160,57 +149,19 @@ def save_agent(session: Session, secret: str, agent: Agent) -> None:
     session.flush()
 
 
-def _prepare(session: Session) -> None:
-    install_guard(session)
-    _install_agent_guard(session)
-
-
-def _install_agent_guard(session: Session) -> None:
-    if session.info.get("agent_guard"):
-        return
-    session.info["agent_guard"] = True
-    event.listen(session, "before_flush", _guard_flush)
-
-
-def _guard_flush(session: OrmSession, _flush_context: object, _instances: object) -> None:
-    allowed = session.info.get("agent_key_write")
-    for obj in session.new:
-        if isinstance(obj, Agent):
-            _check_key_pair(obj)
-    for obj in session.dirty:
-        if isinstance(obj, Agent):
-            _guard_agent(obj, allowed)
-
-
-def _guard_agent(agent: Agent, allowed: object) -> None:
-    _check_key_pair(agent)
-    state = inspect(agent)
-    if not state.persistent:
-        return
-    if state.attrs.owner_id.history.has_changes():
-        raise ServiceError("refused")
-    key_changed = any(
-        state.attrs[name].history.has_changes() for name in ("key_hash", "key_expires_at")
-    )
-    if key_changed and allowed not in ("issue", "roll", "retire"):
-        raise ServiceError("refused")
-
-
 class _key_write:
     def __init__(self, session: Session, kind: str) -> None:
         self.session = session
         self.kind = kind
 
     def __enter__(self) -> None:
-        _install_agent_guard(self.session)
-        self.session.info["agent_key_write"] = self.kind
+        self.session.info[KEY_WRITE] = self.kind
 
     def __exit__(self, *_exc: object) -> None:
-        self.session.info.pop("agent_key_write", None)
+        self.session.info.pop(KEY_WRITE, None)
 
 
 def _human_actor(session: Session, secret: str) -> Human:
-    _prepare(session)
     user = authenticate(session, secret)
     human = session.get(Human, user.id)
     if human is None:
@@ -250,11 +201,6 @@ def _refuse_profile_change(session: Session, user_id: int, kind: str) -> None:
 
 def _check_owner(agent: Agent, human: Human) -> None:
     if agent.owner_id != human.user_id:
-        raise ServiceError("refused")
-
-
-def _check_key_pair(agent: Agent) -> None:
-    if (agent.key_hash is None) != (agent.key_expires_at is None):
         raise ServiceError("refused")
 
 

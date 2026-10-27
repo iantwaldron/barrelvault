@@ -180,7 +180,9 @@ def test_agents_include_retired(session):
 
 def test_generate_key_stores_the_hash_and_expiry(session, monkeypatch):
     monkeypatch.setenv("BARRELVAULT_KEY_LENGTH", "100")
-    agent = _agent(session, _human(session), "Bot", retired_at=datetime.now(UTC))
+    owner = _human(session)
+    user = _user(session, "Bot")
+    agent = Agent(user_id=user.id, owner_id=owner.user_id, retired_at=datetime.now(UTC))
     retired_at = agent.retired_at
     before = datetime.now(UTC)
     raw = agent.generate_key()

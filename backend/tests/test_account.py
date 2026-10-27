@@ -232,6 +232,30 @@ def test_key_edits_outside_issue_roll_and_retire_are_refused(session):
     assert kept.owner_id == original_owner
 
 
+def test_a_session_that_never_called_the_service_is_guarded(session):
+    _human, secret = _account(session)
+    agent, _issued = _live_agent(session, secret)
+    session.commit()
+    plain = Session(session.get_bind())
+    stored = plain.get(Agent, agent.user_id)
+    stored.key_hash = stored.key_hash
+    plain.commit()
+    stored.key_expires_at = datetime.now(UTC) + timedelta(days=9999)
+    with pytest.raises(ServiceError):
+        plain.commit()
+    plain.rollback()
+    stored = plain.get(Agent, agent.user_id)
+    stored.owner_id = agent.user_id
+    with pytest.raises(ServiceError):
+        plain.commit()
+    plain.rollback()
+    token = plain.exec(select(Token)).first()
+    token.expires_at = token.expires_at + timedelta(days=1)
+    with pytest.raises(ServiceError):
+        plain.commit()
+    plain.close()
+
+
 def test_owner_must_be_the_human(session):
     human, secret = _account(session)
     agent = add_agent(session, secret, "Bot")
@@ -428,10 +452,6 @@ def test_save_agent_flushes_a_stored_agent(session):
     stored = session.get(Agent, agent.user_id)
     assert stored is not None
     assert stored.retired_at == when
-
-
-def test_a_new_agent_is_not_history_checked():
-    account._guard_agent(Agent(user_id=1, owner_id=1), None)
 
 
 def test_owner_check_refuses_a_different_user():

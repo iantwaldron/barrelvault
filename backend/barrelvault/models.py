@@ -56,3 +56,8 @@ class Token(SQLModel, table=True):
         self.created_at = minted
         self.expires_at = minted + timedelta(seconds=load_settings().session_length)
         return raw
+
+
+# Imported last: the guards need the classes above, and importing them here
+# registers the write rules for every session that can touch these tables.
+from barrelvault import guards  # noqa: E402, F401

@@ -4,10 +4,10 @@ import hashlib
 from datetime import UTC, datetime
 
 from pwdlib import PasswordHash
-from sqlalchemy import event, inspect
-from sqlalchemy.orm import Session as OrmSession
+from sqlalchemy import inspect
 from sqlmodel import Session, select
 
+from barrelvault.errors import ServiceError
 from barrelvault.models import Agent, Human, Token, User
 from barrelvault.settings import load_settings
 
@@ -15,23 +15,11 @@ _passwords = PasswordHash.recommended()
 _DUMMY_PASSWORD_HASH = _passwords.hash("barrelvault-password-check")
 
 
-class ServiceError(Exception):
-    """A refused account, agent, or session write."""
-
-
 def hash_password(password: str) -> str:
     return _passwords.hash(password)
 
 
-def install_guard(session: Session) -> None:
-    if session.info.get("auth_guard"):
-        return
-    session.info["auth_guard"] = True
-    event.listen(session, "before_flush", _guard_flush)
-
-
 def login(session: Session, email: str, password: str) -> str:
-    install_guard(session)
     human = session.exec(select(Human).where(Human.email == email)).one_or_none()
     stored = human.password_hash if human is not None else _DUMMY_PASSWORD_HASH
     password_matches = _passwords.verify(password, stored)
@@ -41,7 +29,6 @@ def login(session: Session, email: str, password: str) -> str:
 
 
 def exchange_key(session: Session, key: str) -> str:
-    install_guard(session)
     if _blank(key):
         raise ServiceError("refused")
     agent = session.exec(select(Agent).where(Agent.key_hash == _digest(key))).one_or_none()
@@ -54,7 +41,6 @@ def exchange_key(session: Session, key: str) -> str:
 
 def authenticate(session: Session, secret: str) -> User:
     """Accept a session secret. This is the only check later calls use."""
-    install_guard(session)
     if _blank(secret):
         raise ServiceError("refused")
     token = session.exec(select(Token).where(Token.secret_hash == _digest(secret))).one_or_none()
@@ -73,7 +59,6 @@ def authenticate(session: Session, secret: str) -> User:
 
 
 def logout(session: Session, secret: str) -> None:
-    install_guard(session)
     if _blank(secret):
         return
     token = session.exec(select(Token).where(Token.secret_hash == _digest(secret))).one_or_none()
@@ -84,7 +69,6 @@ def logout(session: Session, secret: str) -> None:
 
 def save_session(session: Session, token: Token) -> None:
     """Flush an existing session. A missing or edited expiry, hash, or user is refused."""
-    install_guard(session)
     if not inspect(token).persistent:
         raise ServiceError("refused")
     session.flush()
@@ -97,7 +81,6 @@ def delete_session(session: Session, user_id: int) -> None:
 
 
 def _mint(session: Session, user_id: int) -> str:
-    install_guard(session)
     load_settings()
     existing = session.exec(select(Token).where(Token.user_id == user_id)).one_or_none()
     if existing is not None:
@@ -110,24 +93,6 @@ def _mint(session: Session, user_id: int) -> str:
     session.add(token)
     session.flush()
     return raw
-
-
-def _guard_flush(session: OrmSession, _flush_context: object, _instances: object) -> None:
-    for obj in session.new:
-        if isinstance(obj, Token) and obj.expires_at is None:
-            raise ServiceError("refused")
-    for obj in session.dirty:
-        if isinstance(obj, Token):
-            _guard_token(obj)
-
-
-def _guard_token(token: Token) -> None:
-    if token.expires_at is None:
-        raise ServiceError("refused")
-    state = inspect(token)
-    for name in ("expires_at", "secret_hash", "user_id"):
-        if state.attrs[name].history.has_changes():
-            raise ServiceError("refused")
 
 
 def _agent_key_is_dead(agent: Agent) -> bool:

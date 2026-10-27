@@ -13,3 +13,7 @@ A task management system where a person and their agents collaborate. The produc
 ## Database
 
 Each connection turns foreign keys on, uses WAL, and sets a busy timeout of 5000 milliseconds so a second user of the file waits while the first is writing. Every transaction starts with an explicit `BEGIN`, reads included. Setup starts its transaction with `BEGIN IMMEDIATE`, so two runs cannot both find an empty user table.
+
+## Migrations
+
+The schema is managed with Alembic. The revisions are in `backend/barrelvault/migrations/versions`, and setup applies them. After a model change, run `alembic revision --autogenerate -m "..."` from `backend/` with the virtualenv active, then review the generated file.

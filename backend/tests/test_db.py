@@ -1,12 +1,25 @@
 import sqlite3
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
+from alembic import command
+from alembic.autogenerate import compare_metadata
+from alembic.migration import MigrationContext
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import SQLModel, select
 
 from barrelvault import db
-from barrelvault.db import BUSY_TIMEOUT_MS, get_engine, get_session, open_session
+from barrelvault.db import (
+    BUSY_TIMEOUT_MS,
+    apply_migrations,
+    get_engine,
+    get_session,
+    migration_config,
+    open_session,
+)
 from barrelvault.models import Human, User
 
 
@@ -113,6 +126,45 @@ def test_an_immediate_session_holds_the_write_lock(database):
     other.execute("BEGIN IMMEDIATE")
     other.rollback()
     other.close()
+
+
+def test_migrations_build_the_model_schema(database):
+    apply_migrations()
+    apply_migrations()
+    with get_engine().connect() as connection:
+        differences = compare_metadata(MigrationContext.configure(connection), SQLModel.metadata)
+        version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+    assert differences == []
+    assert version == "0001"
+
+
+def test_migrations_downgrade_to_an_empty_database(database):
+    apply_migrations()
+    command.downgrade(migration_config(), "base")
+    with get_engine().connect() as connection:
+        names = connection.execute(
+            text("SELECT name FROM sqlite_master WHERE type = 'table'")
+        ).scalars()
+        assert set(names) == {"alembic_version"}
+
+
+def test_two_processes_can_migrate_one_file(database):
+    script = "from barrelvault.db import apply_migrations; apply_migrations()"
+    runs = [
+        subprocess.Popen(
+            [sys.executable, "-c", script],
+            cwd=Path(__file__).resolve().parents[1],
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for _ in range(2)
+    ]
+    for run in runs:
+        _out, err = run.communicate(timeout=30)
+        assert run.returncode == 0, err
+    with get_engine().connect() as connection:
+        version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+    assert version == "0001"
 
 
 class _BusyCursor:

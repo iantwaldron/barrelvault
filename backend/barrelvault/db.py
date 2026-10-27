@@ -6,6 +6,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+from alembic import command
+from alembic.config import Config
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
 from sqlmodel import Session, create_engine
@@ -13,6 +15,7 @@ from sqlmodel import Session, create_engine
 from barrelvault.settings import load_settings
 
 BUSY_TIMEOUT_MS = 5000
+MIGRATIONS = Path(__file__).resolve().parent / "migrations"
 
 _engine: Engine | None = None
 
@@ -91,7 +94,11 @@ def get_session() -> Iterator[Session]:
 
 
 def apply_migrations() -> None:
-    """Create any missing tables."""
-    from barrelvault import models
+    """Upgrade the database to the newest migration."""
+    command.upgrade(migration_config(), "head")
 
-    models.SQLModel.metadata.create_all(get_engine())
+
+def migration_config() -> Config:
+    config = Config()
+    config.set_main_option("script_location", str(MIGRATIONS))
+    return config

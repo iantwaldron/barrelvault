@@ -96,7 +96,10 @@ def test_a_blank_password_is_refused(database, monkeypatch, capsys):
 
 
 def test_overlapping_setup_runs_create_one_human(database, monkeypatch, capsys):
+    # Alembic keeps its context in a module global, so threads cannot migrate
+    # at once. Real setup runs are separate processes; test_db covers those.
     apply_migrations()
+    monkeypatch.setattr("barrelvault.cli.apply_migrations", lambda: None)
     both_prompted = threading.Barrier(2)
     answers = {"Name: ": "Ada", "Email: ": "ada@example.com"}
     monkeypatch.setattr("builtins.input", lambda prompt: answers[prompt])

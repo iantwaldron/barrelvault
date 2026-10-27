@@ -101,6 +101,18 @@ def test_wrong_email_and_wrong_password_are_the_same_failure(session, monkeypatc
     assert _tokens(session) == []
 
 
+def test_an_unrecognized_password_hash_is_a_refused_login(session):
+    human = create_account(session, "Ada", "ada@example.com", "password-1")
+    session.connection().execute(
+        text("UPDATE human SET password_hash = 'password-1' WHERE user_id = :user_id"),
+        {"user_id": human.user_id},
+    )
+    session.expire_all()
+    with pytest.raises(ServiceError):
+        login(session, "ada@example.com", "password-1")
+    assert _tokens(session) == []
+
+
 def test_refused_mint_leaves_the_existing_session(session):
     create_account(session, "Ada", "ada@example.com", "password-1")
     secret = login(session, "ada@example.com", "password-1")

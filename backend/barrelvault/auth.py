@@ -4,6 +4,7 @@ import hashlib
 from datetime import UTC, datetime
 
 from pwdlib import PasswordHash
+from pwdlib.exceptions import UnknownHashError
 from sqlalchemy import delete, event
 from sqlalchemy.orm import Session as OrmSession, SessionTransaction
 from sqlmodel import Session, select
@@ -25,7 +26,10 @@ def hash_password(password: str) -> str:
 def login(session: Session, email: str, password: str) -> str:
     human = session.exec(select(Human).where(Human.email == email)).one_or_none()
     stored = human.password_hash if human is not None else _DUMMY_PASSWORD_HASH
-    password_matches = _passwords.verify(password, stored)
+    try:
+        password_matches = _passwords.verify(password, stored)
+    except UnknownHashError:
+        password_matches = False
     if human is None or not password_matches:
         raise ServiceError("refused")
     return _mint(session, human.user_id)

@@ -4,6 +4,8 @@ import hashlib
 from datetime import UTC, datetime
 
 from pwdlib import PasswordHash
+from sqlalchemy import delete, event
+from sqlalchemy.orm import Session as OrmSession, SessionTransaction
 from sqlmodel import Session, select
 
 from barrelvault.errors import ServiceError
@@ -12,6 +14,8 @@ from barrelvault.models import Agent, Human, Token, User
 
 _passwords = PasswordHash.recommended()
 _DUMMY_PASSWORD_HASH = _passwords.hash("barrelvault-password-check")
+# Session row ids that authenticate deleted for a dead agent key.
+_DEAD_SESSIONS = "dead_sessions"
 
 
 def hash_password(password: str) -> str:
@@ -51,9 +55,10 @@ def authenticate(session: Session, secret: str) -> User:
         raise ServiceError("refused")
     agent = session.get(Agent, user.id)
     if agent is not None and _agent_key_is_dead(agent):
-        # The refusal must keep the delete when the caller rolls the request back.
+        # The delete rides the caller's transaction. If that rolls back, the
+        # hook below repeats only the delete, so the caller's writes stay undone.
+        session.info.setdefault(_DEAD_SESSIONS, set()).add(token.id)
         session.delete(token)
-        session.commit()
         raise ServiceError("refused")
     session.info[ACTOR] = (user.id, "agent" if agent is not None else "human")
     return user
@@ -84,6 +89,22 @@ def _mint(session: Session, user_id: int) -> str:
     session.add(token)
     session.flush()
     return raw
+
+
+@event.listens_for(OrmSession, "after_commit")
+def _forget_dead_sessions(session: OrmSession) -> None:
+    session.info.pop(_DEAD_SESSIONS, None)
+
+
+@event.listens_for(OrmSession, "after_transaction_end")
+def _delete_dead_sessions(session: OrmSession, transaction: SessionTransaction) -> None:
+    if transaction.parent is not None:
+        return
+    token_ids = session.info.pop(_DEAD_SESSIONS, None)
+    if not token_ids:
+        return
+    with session.get_bind().begin() as connection:
+        connection.execute(delete(Token).where(Token.id.in_(token_ids)))
 
 
 def _agent_key_is_dead(agent: Agent) -> bool:

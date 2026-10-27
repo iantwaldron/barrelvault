@@ -15,7 +15,7 @@ from barrelvault.auth import (
     login,
     logout,
 )
-from barrelvault.models import Agent, Human, Token
+from barrelvault.models import Agent, Human, Token, User
 from barrelvault.settings import SettingsError
 
 
@@ -303,11 +303,43 @@ def test_dead_agent_key_stays_deleted_when_the_request_rolls_back(tmp_path, monk
         )
     with pytest.raises(ServiceError):
         with db.open_session() as db_session:
+            db_session.add(User(name="Unsaved"))
+            db_session.flush()
             authenticate(db_session, agent_secret)
     with db.open_session() as db_session:
         assert db_session.exec(select(Token).where(Token.user_id == agent_id)).first() is None
+        assert db_session.exec(select(User).where(User.name == "Unsaved")).first() is None
         assert authenticate(db_session, secret).name == "Ada"
     _reset_engine()
+
+
+def test_dead_agent_key_delete_survives_a_session_closed_without_commit(session):
+    _human, secret = _account(session)
+    agent, issued = _live_agent(session, secret)
+    agent_secret = exchange_key(session, issued.key)
+    _update_agent(session, agent.user_id, key_hash=None, key_expires_at=None)
+    session.commit()
+    request = Session(session.get_bind())
+    request.add(User(name="Unsaved"))
+    with pytest.raises(ServiceError):
+        authenticate(request, agent_secret)
+    request.close()
+    assert session.exec(select(Token).where(Token.user_id == agent.user_id)).first() is None
+    assert session.exec(select(User).where(User.name == "Unsaved")).first() is None
+
+
+def test_dead_agent_key_delete_commits_with_the_caller(session):
+    _human, secret = _account(session)
+    agent, issued = _live_agent(session, secret)
+    agent_secret = exchange_key(session, issued.key)
+    _update_agent(session, agent.user_id, key_hash=None, key_expires_at=None)
+    session.commit()
+    with pytest.raises(ServiceError):
+        authenticate(session, agent_secret)
+    session.begin_nested().rollback()
+    session.commit()
+    assert auth._DEAD_SESSIONS not in session.info
+    assert session.exec(select(Token).where(Token.user_id == agent.user_id)).first() is None
 
 
 def test_blank_secrets_are_refused(session):

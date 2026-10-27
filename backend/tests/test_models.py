@@ -85,9 +85,11 @@ def test_agent_user_must_exist(session):
 
 def test_agent_owner_must_exist(session):
     user = _user(session, "Bot")
-    session.add(Agent(user_id=user.id, owner_id=user.id + 1))
     with pytest.raises(IntegrityError):
-        session.commit()
+        session.connection().execute(
+            text("INSERT INTO agent (user_id, owner_id) VALUES (:user_id, :owner_id)"),
+            {"user_id": user.id, "owner_id": user.id + 1},
+        )
 
 
 def test_one_human_profile_per_user(session):

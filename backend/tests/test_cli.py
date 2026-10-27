@@ -9,7 +9,7 @@ from sqlmodel import select
 from barrelvault import auth, db
 from barrelvault.cli import main
 from barrelvault.db import apply_migrations, open_session
-from barrelvault.models import Agent, Human, User
+from barrelvault.models import Human, User
 
 
 @pytest.fixture
@@ -63,10 +63,7 @@ def test_setup_exits_when_an_account_exists(database, monkeypatch, capsys):
 def test_an_existing_user_exits_before_the_prompts(database, monkeypatch, capsys):
     apply_migrations()
     with open_session() as session:
-        user = User(name="Bot")
-        session.add(user)
-        session.flush()
-        session.add(Agent(user_id=user.id, owner_id=user.id))
+        session.add(User(name="Bot"))
     prompts = _reject_prompts(monkeypatch)
     with pytest.raises(SystemExit) as raised:
         main(["setup"])

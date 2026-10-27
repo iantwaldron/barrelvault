@@ -34,9 +34,9 @@ class Agent(SQLModel, table=True):
 
     def generate_key(self) -> str:
         """Store a new key hash and expiry. Return the raw key."""
+        length = load_settings().key_length
         raw = secrets.token_hex(32)
         self.key_hash = hashlib.sha256(raw.encode()).hexdigest()
-        length = load_settings().key_length
         self.key_expires_at = datetime.now(UTC) + timedelta(seconds=length)
         return raw
 
@@ -50,11 +50,12 @@ class Token(SQLModel, table=True):
 
     def generate_secret(self) -> str:
         """Store a new secret hash and expiry. Return the raw secret."""
+        length = load_settings().session_length
         raw = secrets.token_hex(32)
         minted = datetime.now(UTC)
         self.secret_hash = hashlib.sha256(raw.encode()).hexdigest()
         self.created_at = minted
-        self.expires_at = minted + timedelta(seconds=load_settings().session_length)
+        self.expires_at = minted + timedelta(seconds=length)
         return raw
 
 

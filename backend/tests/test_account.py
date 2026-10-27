@@ -6,22 +6,18 @@ from sqlalchemy import event, text
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
-from barrelvault import account, auth
+from barrelvault import auth
 from barrelvault.auth import ServiceError, authenticate, exchange_key, login
 from barrelvault.models import Agent, Human, Token, User
 from barrelvault.account import (
     IssuedKey,
     add_agent,
-    add_profile,
-    assign_owner,
     create_account,
     delete_agent,
     issue_key,
     reassign_agent,
-    replace_profile,
     retire_agent,
     roll_key,
-    save_agent,
 )
 from barrelvault.settings import SettingsError
 
@@ -97,20 +93,19 @@ def test_create_account_refuses_a_blank_field(session):
 
 
 def test_a_session_cannot_create_a_human(session):
-    _human, secret = _account(session)
-    agent, issued = _live_agent(session, secret)
+    human, secret = _account(session)
+    _agent, issued = _live_agent(session, secret)
     agent_secret = exchange_key(session, issued.key)
+    session.commit()
     for actor in (secret, agent_secret):
+        authenticate(session, actor)
+        user = User(name="Bea")
+        session.add(user)
+        session.add(Human(user_id=9999, email="bea@example.com", password_hash="hash"))
         with pytest.raises(ServiceError):
-            create_account(
-                session,
-                "Bea",
-                "bea@example.com",
-                "password-2",
-                secret=actor,
-            )
-    assert session.get(Agent, agent.user_id) is not None
-    assert session.exec(select(Human)).one().user_id == _human.user_id
+            session.flush()
+        session.rollback()
+    assert session.exec(select(Human)).one().user_id == human.user_id
 
 
 def test_add_stores_an_empty_key(session):
@@ -214,16 +209,16 @@ def test_key_edits_outside_issue_roll_and_retire_are_refused(session):
     original_owner = agent.owner_id
     agent.key_expires_at = original_expiry + timedelta(seconds=1)
     with pytest.raises(ServiceError):
-        save_agent(session, secret, agent)
+        session.flush()
     agent.key_hash = None
     with pytest.raises(ServiceError):
-        save_agent(session, secret, agent)
+        session.flush()
     agent.key_expires_at = None
     with pytest.raises(ServiceError):
-        save_agent(session, secret, agent)
+        session.flush()
     agent.owner_id = agent.user_id
     with pytest.raises(ServiceError):
-        save_agent(session, secret, agent)
+        session.flush()
     session.rollback()
     kept = session.get(Agent, agent.user_id)
     assert kept is not None
@@ -259,32 +254,85 @@ def test_a_session_that_never_called_the_service_is_guarded(session):
 def test_owner_must_be_the_human(session):
     human, secret = _account(session)
     agent = add_agent(session, secret, "Bot")
-    other = add_agent(session, secret, "Other")
-    assign_owner(session, secret, agent.user_id, human.user_id)
-    assert agent.owner_id == human.user_id
-    for owner_id in (agent.user_id, other.user_id, human.user_id + 100):
+    bea_id, _bea_secret = _second_account(session)
+    authenticate(session, secret)
+    session.commit()
+    for owner_id in (agent.user_id, human.user_id + 100, bea_id):
+        user = User(name=f"Bot {owner_id}")
+        session.add(user)
+        session.flush()
+        session.add(Agent(user_id=user.id, owner_id=owner_id))
         with pytest.raises(ServiceError):
-            assign_owner(session, secret, agent.user_id, owner_id)
-    assert agent.owner_id == human.user_id
+            session.flush()
+        session.rollback()
+    agent = session.get(Agent, agent.user_id)
+    agent.owner_id = bea_id
+    with pytest.raises(ServiceError):
+        session.flush()
+    session.rollback()
+    assert session.get(Agent, agent.user_id).owner_id == human.user_id
+
+
+def test_an_unauthenticated_session_needs_a_human_owner(session):
+    create_account(session, "Ada", "ada@example.com", "password-1")
+    user = User(name="Bot")
+    session.add(user)
+    session.flush()
+    session.add(Agent(user_id=user.id, owner_id=user.id))
+    with pytest.raises(ServiceError):
+        session.flush()
+    session.rollback()
+    session.add(User(id=50, name="Bea"))
+    session.add(User(id=51, name="Bea bot"))
+    session.flush()
+    session.add(Human(user_id=50, email="bea@example.com", password_hash="hash"))
+    session.add(Agent(user_id=51, owner_id=50))
+    session.flush()
+    assert session.get(Agent, 51).owner_id == 50
 
 
 def test_profile_changes_are_refused(session):
     human, secret = _account(session)
     agent = add_agent(session, secret, "Bot")
-    for user_id, kind in (
-        (human.user_id, "agent"),
-        (agent.user_id, "human"),
-        (human.user_id, "human"),
-        (agent.user_id, "agent"),
-    ):
+    session.commit()
+
+    def refused(*writes) -> None:
+        for write in writes:
+            write()
         with pytest.raises(ServiceError):
-            add_profile(session, secret, user_id, kind)
-        with pytest.raises(ServiceError):
-            replace_profile(session, secret, user_id, kind)
+            session.flush()
+        session.rollback()
+
+    stored_human = lambda: session.get(Human, human.user_id)
+    stored_agent = lambda: session.get(Agent, agent.user_id)
+    refused(
+        lambda: session.delete(stored_human()),
+        lambda: session.add(Agent(user_id=human.user_id, owner_id=human.user_id)),
+    )
+    refused(
+        lambda: session.delete(stored_agent()),
+        lambda: session.add(
+            Human(user_id=agent.user_id, email="bot@example.com", password_hash="hash")
+        ),
+    )
+    refused(lambda: session.add(Agent(user_id=human.user_id, owner_id=human.user_id)))
+    refused(
+        lambda: session.add(
+            Human(user_id=agent.user_id, email="bot@example.com", password_hash="hash")
+        )
+    )
     assert session.get(Human, human.user_id) is not None
     assert session.get(Agent, human.user_id) is None
     assert session.get(Agent, agent.user_id) is not None
     assert session.get(Human, agent.user_id) is None
+
+
+def test_a_new_user_gets_one_profile(session):
+    session.add(User(id=1, name="Ada"))
+    session.add(Human(user_id=1, email="ada@example.com", password_hash="hash"))
+    session.add(Agent(user_id=1, owner_id=1))
+    with pytest.raises(ServiceError):
+        session.flush()
 
 
 def test_agent_session_cannot_write(session):
@@ -298,12 +346,24 @@ def test_agent_session_cannot_write(session):
         lambda: retire_agent(session, agent_secret, agent.user_id),
         lambda: reassign_agent(session, agent_secret, agent.user_id),
         lambda: delete_agent(session, agent_secret, agent.user_id),
-        lambda: add_profile(session, agent_secret, human.user_id, "agent"),
-        lambda: assign_owner(session, agent_secret, agent.user_id, agent.user_id),
     )
     for call in calls:
         with pytest.raises(ServiceError):
             call()
+    session.commit()
+    writes = (
+        lambda: session.add(User(name="Other")),
+        lambda: setattr(session.get(User, human.user_id), "name", "Eve"),
+        lambda: setattr(session.get(Human, human.user_id), "email", "eve@example.com"),
+        lambda: setattr(session.get(Agent, agent.user_id), "retired_at", datetime.now(UTC)),
+        lambda: session.delete(session.get(Agent, agent.user_id)),
+    )
+    for write in writes:
+        authenticate(session, agent_secret)
+        write()
+        with pytest.raises(ServiceError):
+            session.flush()
+        session.rollback()
     assert session.get(User, human.user_id) is not None
     assert session.get(Agent, agent.user_id) is not None
     assert session.get(Human, human.user_id) is not None
@@ -437,36 +497,6 @@ def test_a_missing_agent_is_refused(session):
     _human, secret = _account(session)
     with pytest.raises(ServiceError):
         issue_key(session, secret, 9999)
-    with pytest.raises(ServiceError):
-        save_agent(session, secret, Agent(user_id=1, owner_id=1))
-
-
-def test_save_agent_flushes_a_stored_agent(session):
-    _human, secret = _account(session)
-    agent = add_agent(session, secret, "Bot")
-    session.commit()
-    when = datetime.now(UTC)
-    agent.retired_at = when
-    save_agent(session, secret, agent)
-    session.expire(agent)
-    stored = session.get(Agent, agent.user_id)
-    assert stored is not None
-    assert stored.retired_at == when
-
-
-def test_owner_check_refuses_a_different_user():
-    human = Human(user_id=1, email="ada@example.com", password_hash="hash")
-    agent = Agent(user_id=2, owner_id=2)
-    with pytest.raises(ServiceError):
-        account._check_owner(agent, human)
-
-
-def test_profile_refusal_covers_an_unknown_user_and_kind(session):
-    _human, secret = _account(session)
-    with pytest.raises(ServiceError):
-        add_profile(session, secret, 9999, "agent")
-    with pytest.raises(ServiceError):
-        replace_profile(session, secret, 9999, "other")
 
 
 def test_reassign_with_nothing_attached_removes_the_agent(session):

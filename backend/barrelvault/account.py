@@ -3,13 +3,12 @@
 from datetime import UTC, datetime
 from typing import NamedTuple
 
-from sqlalchemy import inspect, text
+from sqlalchemy import text
 from sqlmodel import Session, select
 
 from barrelvault.auth import ServiceError, authenticate, delete_session, hash_password
 from barrelvault.guards import KEY_WRITE
 from barrelvault.models import Agent, Human, User
-from barrelvault.settings import load_settings
 
 _REFERENCES = (
     ("task", ("created_by", "updated_by", "owned_by")),
@@ -23,17 +22,8 @@ class IssuedKey(NamedTuple):
     key_expires_at: datetime
 
 
-def create_account(
-    session: Session,
-    name: str,
-    email: str,
-    password: str,
-    *,
-    secret: str | None = None,
-) -> Human:
-    """Create the one human account. A session secret is refused."""
-    if secret is not None:
-        raise ServiceError("refused")
+def create_account(session: Session, name: str, email: str, password: str) -> Human:
+    """Create the first human. Setup is the only caller."""
     if _blank(name) or _blank(email) or _blank(password):
         raise ServiceError("refused")
     if session.exec(select(Human)).first() is not None:
@@ -61,7 +51,6 @@ def add_agent(session: Session, secret: str, name: str) -> Agent:
     session.add(user)
     session.flush()
     agent = Agent(user_id=user.id, owner_id=human.user_id)
-    _check_owner(agent, human)
     session.add(agent)
     session.flush()
     return agent
@@ -69,7 +58,6 @@ def add_agent(session: Session, secret: str, name: str) -> Agent:
 
 def issue_key(session: Session, secret: str, agent_user_id: int) -> IssuedKey:
     human = _human_actor(session, secret)
-    load_settings()
     agent = _agent(session, human, agent_user_id)
     if agent.retired_at is not None or agent.key_hash is not None:
         raise ServiceError("refused")
@@ -82,7 +70,6 @@ def issue_key(session: Session, secret: str, agent_user_id: int) -> IssuedKey:
 
 def roll_key(session: Session, secret: str, agent_user_id: int) -> IssuedKey:
     human = _human_actor(session, secret)
-    load_settings()
     agent = _agent(session, human, agent_user_id)
     if agent.retired_at is not None or agent.key_hash is None or agent.key_expires_at is None:
         raise ServiceError("refused")
@@ -120,33 +107,6 @@ def reassign_agent(session: Session, secret: str, agent_user_id: int) -> None:
     agent = _agent(session, human, agent_user_id)
     _move_references(session, agent.user_id, human.user_id)
     _remove_agent(session, agent)
-
-
-def add_profile(session: Session, secret: str, user_id: int, kind: str) -> None:
-    """Refuse a second profile on a user that already has one."""
-    _human_actor(session, secret)
-    _refuse_profile_change(session, user_id, kind)
-
-
-def replace_profile(session: Session, secret: str, user_id: int, kind: str) -> None:
-    """Refuse swapping a human profile and an agent profile."""
-    _human_actor(session, secret)
-    _refuse_profile_change(session, user_id, kind)
-
-
-def assign_owner(session: Session, secret: str, agent_user_id: int, owner_id: int) -> None:
-    human = _human_actor(session, secret)
-    agent = _agent(session, human, agent_user_id)
-    if owner_id != human.user_id or owner_id != agent.owner_id:
-        raise ServiceError("refused")
-
-
-def save_agent(session: Session, secret: str, agent: Agent) -> None:
-    """Flush an existing agent. Owner, key, and expiry edits are refused."""
-    _human_actor(session, secret)
-    if not inspect(agent).persistent:
-        raise ServiceError("refused")
-    session.flush()
 
 
 class _key_write:
@@ -187,21 +147,6 @@ def _remove_agent(session: Session, agent: Agent) -> None:
     if user is not None:
         session.delete(user)
     session.flush()
-
-
-def _refuse_profile_change(session: Session, user_id: int, kind: str) -> None:
-    human = session.get(Human, user_id)
-    agent = session.get(Agent, user_id)
-    if kind not in ("human", "agent"):
-        raise ServiceError("refused")
-    if human is not None or agent is not None:
-        raise ServiceError("refused")
-    raise ServiceError("refused")
-
-
-def _check_owner(agent: Agent, human: Human) -> None:
-    if agent.owner_id != human.user_id:
-        raise ServiceError("refused")
 
 
 def _attached(session: Session, user_id: int) -> bool:

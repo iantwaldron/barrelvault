@@ -14,7 +14,6 @@ from barrelvault.auth import (
     exchange_key,
     login,
     logout,
-    save_session,
 )
 from barrelvault.models import Agent, Human, Token
 from barrelvault.settings import SettingsError
@@ -188,8 +187,8 @@ def test_a_mint_without_an_expiry_is_refused(session, monkeypatch):
     monkeypatch.setattr(auth.Token, "generate_secret", generate_secret)
     with pytest.raises(ServiceError):
         login(session, "ada@example.com", "password-1")
-    assert session.exec(select(Token).where(Token.secret_hash == "unfinished")).first() is None
     session.rollback()
+    assert session.exec(select(Token).where(Token.secret_hash == "unfinished")).first() is None
     assert authenticate(session, secret).name == "Ada"
 
 
@@ -203,36 +202,24 @@ def test_session_field_changes_are_refused(session):
     original_user = token.user_id
     token.expires_at = None
     with pytest.raises(ServiceError):
-        save_session(session, token)
+        session.flush()
     session.rollback()
     token = session.exec(select(Token).where(Token.secret_hash == original_hash)).one()
     token.expires_at = original_expiry + timedelta(seconds=1)
     with pytest.raises(ServiceError):
-        save_session(session, token)
+        session.flush()
     token.secret_hash = "other"
     with pytest.raises(ServiceError):
-        save_session(session, token)
+        session.flush()
     token.user_id = original_user + 1
     with pytest.raises(ServiceError):
-        save_session(session, token)
+        session.flush()
     session.rollback()
     kept = _tokens(session)[0]
     assert kept.expires_at == original_expiry
     assert kept.secret_hash == original_hash
     assert kept.user_id == original_user
     assert authenticate(session, secret).id == original_user
-
-
-def test_save_session_refuses_a_token_that_is_not_stored(session):
-    human = create_account(session, "Ada", "ada@example.com", "password-1")
-    token = Token(
-        user_id=human.user_id,
-        secret_hash="hash",
-        expires_at=datetime.now(UTC) + timedelta(seconds=60),
-    )
-    with pytest.raises(ServiceError):
-        save_session(session, token)
-    assert _tokens(session) == []
 
 
 def test_authenticate_refuses_unknown_and_expired_secrets(session):

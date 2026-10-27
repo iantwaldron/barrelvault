@@ -4,12 +4,11 @@ import hashlib
 from datetime import UTC, datetime
 
 from pwdlib import PasswordHash
-from sqlalchemy import inspect
 from sqlmodel import Session, select
 
 from barrelvault.errors import ServiceError
+from barrelvault.guards import ACTOR
 from barrelvault.models import Agent, Human, Token, User
-from barrelvault.settings import load_settings
 
 _passwords = PasswordHash.recommended()
 _DUMMY_PASSWORD_HASH = _passwords.hash("barrelvault-password-check")
@@ -41,6 +40,7 @@ def exchange_key(session: Session, key: str) -> str:
 
 def authenticate(session: Session, secret: str) -> User:
     """Accept a session secret. This is the only check later calls use."""
+    session.info.pop(ACTOR, None)
     if _blank(secret):
         raise ServiceError("refused")
     token = session.exec(select(Token).where(Token.secret_hash == _digest(secret))).one_or_none()
@@ -55,6 +55,7 @@ def authenticate(session: Session, secret: str) -> User:
         session.delete(token)
         session.commit()
         raise ServiceError("refused")
+    session.info[ACTOR] = (user.id, "agent" if agent is not None else "human")
     return user
 
 
@@ -67,13 +68,6 @@ def logout(session: Session, secret: str) -> None:
         session.flush()
 
 
-def save_session(session: Session, token: Token) -> None:
-    """Flush an existing session. A missing or edited expiry, hash, or user is refused."""
-    if not inspect(token).persistent:
-        raise ServiceError("refused")
-    session.flush()
-
-
 def delete_session(session: Session, user_id: int) -> None:
     token = session.exec(select(Token).where(Token.user_id == user_id)).one_or_none()
     if token is not None:
@@ -81,15 +75,12 @@ def delete_session(session: Session, user_id: int) -> None:
 
 
 def _mint(session: Session, user_id: int) -> str:
-    load_settings()
+    token = Token(user_id=user_id)
+    raw = token.generate_secret()
     existing = session.exec(select(Token).where(Token.user_id == user_id)).one_or_none()
     if existing is not None:
         session.delete(existing)
         session.flush()
-    token = Token(user_id=user_id)
-    raw = token.generate_secret()
-    if token.expires_at is None:
-        raise ServiceError("refused")
     session.add(token)
     session.flush()
     return raw

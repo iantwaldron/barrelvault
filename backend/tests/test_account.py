@@ -51,6 +51,22 @@ def _account(session: Session) -> tuple[Human, str]:
     return human, secret
 
 
+def _second_account(session: Session) -> tuple[int, str]:
+    """Insert a second human directly, the way the spec tells tests to."""
+    connection = session.connection()
+    user_id = connection.execute(
+        text("INSERT INTO user (name) VALUES ('Bea') RETURNING id")
+    ).scalar_one()
+    connection.execute(
+        text(
+            "INSERT INTO human (user_id, email, password_hash) "
+            "VALUES (:user_id, 'bea@example.com', :password_hash)"
+        ),
+        {"user_id": user_id, "password_hash": auth.hash_password("password-2")},
+    )
+    return user_id, login(session, "bea@example.com", "password-2")
+
+
 def _live_agent(session: Session, secret: str, name: str = "Bot") -> tuple[Agent, IssuedKey]:
     agent = add_agent(session, secret, name)
     issued = issue_key(session, secret, agent.user_id)
@@ -267,6 +283,34 @@ def test_agent_session_cannot_write(session):
     assert session.get(User, human.user_id) is not None
     assert session.get(Agent, agent.user_id) is not None
     assert session.get(Human, human.user_id) is not None
+
+
+def test_a_human_cannot_change_another_accounts_agent(session):
+    _human, secret = _account(session)
+    bea_id, bea_secret = _second_account(session)
+    bea_bot, bea_key = _live_agent(session, bea_secret, "Bea bot")
+    bea_bare = add_agent(session, bea_secret, "Bea bare")
+    bea_bot_secret = exchange_key(session, bea_key.key)
+    session.commit()
+    calls = (
+        lambda: issue_key(session, secret, bea_bare.user_id),
+        lambda: roll_key(session, secret, bea_bot.user_id),
+        lambda: retire_agent(session, secret, bea_bot.user_id),
+        lambda: delete_agent(session, secret, bea_bare.user_id),
+        lambda: reassign_agent(session, secret, bea_bot.user_id),
+    )
+    for call in calls:
+        with pytest.raises(ServiceError):
+            call()
+    session.expire_all()
+    bot = session.get(Agent, bea_bot.user_id)
+    bare = session.get(Agent, bea_bare.user_id)
+    assert bot.owner_id == bea_id
+    assert bot.key_hash == hashlib.sha256(bea_key.key.encode()).hexdigest()
+    assert bot.retired_at is None
+    assert bare is not None
+    assert bare.key_hash is None
+    assert authenticate(session, bea_bot_secret).id == bea_bot.user_id
 
 
 def test_roll_and_retire_delete_only_the_agent_session(session):

@@ -76,9 +76,9 @@ def add_agent(session: Session, secret: str, name: str) -> Agent:
 
 
 def issue_key(session: Session, secret: str, agent_user_id: int) -> IssuedKey:
-    _human_actor(session, secret)
+    human = _human_actor(session, secret)
     load_settings()
-    agent = _agent(session, agent_user_id)
+    agent = _agent(session, human, agent_user_id)
     if agent.retired_at is not None or agent.key_hash is not None:
         raise ServiceError("refused")
     with _key_write(session, "issue"):
@@ -90,9 +90,9 @@ def issue_key(session: Session, secret: str, agent_user_id: int) -> IssuedKey:
 
 
 def roll_key(session: Session, secret: str, agent_user_id: int) -> IssuedKey:
-    _human_actor(session, secret)
+    human = _human_actor(session, secret)
     load_settings()
-    agent = _agent(session, agent_user_id)
+    agent = _agent(session, human, agent_user_id)
     if agent.retired_at is not None or agent.key_hash is None or agent.key_expires_at is None:
         raise ServiceError("refused")
     with _key_write(session, "roll"):
@@ -105,8 +105,8 @@ def roll_key(session: Session, secret: str, agent_user_id: int) -> IssuedKey:
 
 
 def retire_agent(session: Session, secret: str, agent_user_id: int) -> None:
-    _human_actor(session, secret)
-    agent = _agent(session, agent_user_id)
+    human = _human_actor(session, secret)
+    agent = _agent(session, human, agent_user_id)
     with _key_write(session, "retire"):
         if agent.retired_at is None:
             agent.retired_at = datetime.now(UTC)
@@ -119,8 +119,8 @@ def retire_agent(session: Session, secret: str, agent_user_id: int) -> None:
 
 
 def delete_agent(session: Session, secret: str, agent_user_id: int) -> None:
-    _human_actor(session, secret)
-    agent = _agent(session, agent_user_id)
+    human = _human_actor(session, secret)
+    agent = _agent(session, human, agent_user_id)
     if _attached(session, agent.user_id):
         return
     _remove_agent(session, agent)
@@ -128,7 +128,7 @@ def delete_agent(session: Session, secret: str, agent_user_id: int) -> None:
 
 def reassign_agent(session: Session, secret: str, agent_user_id: int) -> None:
     human = _human_actor(session, secret)
-    agent = _agent(session, agent_user_id)
+    agent = _agent(session, human, agent_user_id)
     _move_references(session, agent.user_id, human.user_id)
     _remove_agent(session, agent)
 
@@ -147,7 +147,7 @@ def replace_profile(session: Session, secret: str, user_id: int, kind: str) -> N
 
 def assign_owner(session: Session, secret: str, agent_user_id: int, owner_id: int) -> None:
     human = _human_actor(session, secret)
-    agent = _agent(session, agent_user_id)
+    agent = _agent(session, human, agent_user_id)
     if owner_id != human.user_id or owner_id != agent.owner_id:
         raise ServiceError("refused")
 
@@ -218,8 +218,11 @@ def _human_actor(session: Session, secret: str) -> Human:
     return human
 
 
-def _agent(session: Session, user_id: int) -> Agent:
-    agent = session.get(Agent, user_id)
+def _agent(session: Session, human: Human, user_id: int) -> Agent:
+    """Return an agent in this human's account. Any other agent is refused."""
+    agent = session.exec(
+        select(Agent).where(Agent.user_id == user_id, Agent.owner_id == human.user_id)
+    ).one_or_none()
     if agent is None:
         raise ServiceError("refused")
     return agent

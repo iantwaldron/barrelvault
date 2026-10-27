@@ -272,6 +272,18 @@ def test_a_dead_agent_key_deletes_that_session_only(session):
     assert authenticate(session, secret).id == human.user_id
 
 
+def test_a_retired_agent_session_is_deleted_and_refused(session):
+    human, secret = _account(session)
+    agent, issued = _live_agent(session, secret)
+    agent_secret = exchange_key(session, issued.key)
+    _update_agent(session, agent.user_id, retired_at=datetime.now(UTC).isoformat())
+    session.commit()
+    with pytest.raises(ServiceError):
+        authenticate(session, agent_secret)
+    assert session.exec(select(Token).where(Token.user_id == agent.user_id)).first() is None
+    assert authenticate(session, secret).id == human.user_id
+
+
 def test_dead_agent_key_stays_deleted_when_the_request_rolls_back(tmp_path, monkeypatch):
     monkeypatch.setenv("BARRELVAULT_DB", str(tmp_path / "barrelvault.db"))
     monkeypatch.delenv("BARRELVAULT_SESSION_LENGTH", raising=False)

@@ -173,16 +173,37 @@ def test_issue_and_roll_refuse_an_empty_or_retired_agent(session):
     agent = add_agent(session, secret, "Bot")
     with pytest.raises(ServiceError):
         roll_key(session, secret, agent.user_id)
-    issued = issue_key(session, secret, agent.user_id)
-    agent.retired_at = datetime.now(UTC)
-    session.add(agent)
-    session.flush()
+    issue_key(session, secret, agent.user_id)
+    retire_agent(session, secret, agent.user_id)
     with pytest.raises(ServiceError):
         issue_key(session, secret, agent.user_id)
     with pytest.raises(ServiceError):
         roll_key(session, secret, agent.user_id)
     session.refresh(agent)
-    assert agent.key_hash == hashlib.sha256(issued.key.encode()).hexdigest()
+    assert agent.key_hash is None
+    assert agent.key_expires_at is None
+
+
+def test_retire_is_the_only_way_to_set_retired_at(session):
+    _human, secret = _account(session)
+    agent, issued = _live_agent(session, secret)
+    agent_secret = exchange_key(session, issued.key)
+    session.commit()
+    agent.retired_at = datetime.now(UTC)
+    with pytest.raises(ServiceError):
+        session.flush()
+    session.rollback()
+    assert session.get(Agent, agent.user_id).retired_at is None
+    retire_agent(session, secret, agent.user_id)
+    session.commit()
+    retired = session.get(Agent, agent.user_id)
+    retired.retired_at = None
+    with pytest.raises(ServiceError):
+        session.flush()
+    session.rollback()
+    assert session.get(Agent, agent.user_id).retired_at is not None
+    with pytest.raises(ServiceError):
+        authenticate(session, agent_secret)
 
 
 def test_roll_replaces_an_expired_key(session):

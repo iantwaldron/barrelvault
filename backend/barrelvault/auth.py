@@ -87,6 +87,8 @@ def _mint(session: Session, user_id: int) -> str:
 
 
 def _agent_key_is_dead(agent: Agent) -> bool:
+    if agent.retired_at is not None:
+        return True
     if agent.key_hash is None or agent.key_expires_at is None:
         return True
     return _as_utc(agent.key_expires_at) <= datetime.now(UTC)

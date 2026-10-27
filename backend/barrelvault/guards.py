@@ -95,6 +95,8 @@ def _check_agent_update(agent: Agent, key_write: object) -> None:
     )
     if key_changed and key_write not in ("issue", "roll", "retire"):
         raise ServiceError("refused")
+    if state.attrs.retired_at.history.has_changes() and key_write != "retire":
+        raise ServiceError("refused")
 
 
 def _check_key_pair(agent: Agent) -> None:

@@ -113,3 +113,34 @@ def test_an_immediate_session_holds_the_write_lock(database):
     other.execute("BEGIN IMMEDIATE")
     other.rollback()
     other.close()
+
+
+class _BusyCursor:
+    def __init__(self, failures: list[str]) -> None:
+        self.failures = failures
+        self.calls = 0
+
+    def execute(self, _statement: str) -> None:
+        self.calls += 1
+        if self.failures:
+            raise sqlite3.OperationalError(self.failures.pop(0))
+
+    def fetchall(self) -> list[object]:
+        return []
+
+
+def test_the_wal_switch_waits_out_a_locked_file():
+    cursor = _BusyCursor(["database is locked", "database is locked"])
+    db._use_wal(cursor)
+    assert cursor.calls == 3
+
+
+def test_the_wal_switch_gives_up_at_the_busy_timeout(monkeypatch):
+    monkeypatch.setattr(db, "BUSY_TIMEOUT_MS", 0)
+    with pytest.raises(sqlite3.OperationalError, match="locked"):
+        db._use_wal(_BusyCursor(["database is locked"]))
+
+
+def test_the_wal_switch_raises_other_errors():
+    with pytest.raises(sqlite3.OperationalError, match="disk I/O"):
+        db._use_wal(_BusyCursor(["disk I/O error"]))

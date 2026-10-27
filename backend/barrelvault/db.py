@@ -1,5 +1,7 @@
 """The process-wide database engine and a session for each unit of work."""
 
+import sqlite3
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -36,8 +38,7 @@ def _build_engine(db_path: str) -> Engine:
         dbapi_connection.isolation_level = None
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.fetchall()
+        _use_wal(cursor)
         cursor.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
         cursor.close()
 
@@ -47,6 +48,20 @@ def _build_engine(db_path: str) -> Engine:
         connection.exec_driver_sql("BEGIN IMMEDIATE" if immediate else "BEGIN")
 
     return engine
+
+
+def _use_wal(cursor: sqlite3.Cursor) -> None:
+    """Switch to WAL. SQLite skips the busy handler here, so wait by hand."""
+    deadline = time.monotonic() + BUSY_TIMEOUT_MS / 1000
+    while True:
+        try:
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.fetchall()
+            return
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc) or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.01)
 
 
 @contextmanager

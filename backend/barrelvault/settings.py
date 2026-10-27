@@ -2,8 +2,10 @@
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
-DEFAULT_DB_PATH = "backend/barrelvault.db"
+# backend/barrelvault.db, wherever the process was started from.
+DEFAULT_DB_PATH = str(Path(__file__).resolve().parents[1] / "barrelvault.db")
 DEFAULT_SESSION_LENGTH = 604800
 DEFAULT_KEY_LENGTH = 31536000
 

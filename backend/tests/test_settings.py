@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from barrelvault.settings import (
@@ -63,3 +65,9 @@ def test_reads_process_environment(monkeypatch):
 def test_bad_length_is_refused(name, raw):
     with pytest.raises(SettingsError):
         load_settings({name: raw})
+
+
+def test_the_default_database_is_in_the_backend_directory(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    settings = load_settings({})
+    assert Path(settings.db_path) == Path(__file__).resolve().parents[1] / "barrelvault.db"

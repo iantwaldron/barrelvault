@@ -1,3 +1,5 @@
+import sqlite3
+
 import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -91,3 +93,23 @@ def test_foreign_keys_are_enforced(database):
     with pytest.raises(IntegrityError):
         with open_session() as session:
             session.add(Human(user_id=1, email="ada@example.com", password_hash="hash"))
+
+
+def test_a_read_runs_inside_a_transaction(database):
+    with open_session() as session:
+        session.execute(text("SELECT 1"))
+        assert session.connection().connection.dbapi_connection.in_transaction
+
+
+def test_an_immediate_session_holds_the_write_lock(database):
+    SQLModel.metadata.create_all(get_engine())
+    with open_session(immediate=True) as session:
+        session.execute(text("SELECT 1"))
+        other = sqlite3.connect(database, timeout=0)
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            other.execute("BEGIN IMMEDIATE")
+        other.close()
+    other = sqlite3.connect(database, timeout=0)
+    other.execute("BEGIN IMMEDIATE")
+    other.rollback()
+    other.close()

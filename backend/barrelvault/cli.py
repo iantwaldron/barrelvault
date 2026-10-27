@@ -4,12 +4,9 @@ import argparse
 import getpass
 import sys
 
-from sqlmodel import select
-
-from barrelvault.account import create_account
+from barrelvault.account import create_account, is_set_up
 from barrelvault.auth import ServiceError
 from barrelvault.db import apply_migrations, open_session
-from barrelvault.models import User
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -23,7 +20,7 @@ def main(argv: list[str] | None = None) -> None:
 def setup() -> None:
     apply_migrations()
     with open_session() as session:
-        exists = session.exec(select(User)).first() is not None
+        exists = is_set_up(session)
     if exists:
         _exit("Barrelvault is already set up.")
     name = input("Name: ")
@@ -33,7 +30,7 @@ def setup() -> None:
     if password != confirmed:
         _exit("Passwords do not match.")
     try:
-        with open_session() as session:
+        with open_session(immediate=True) as session:
             create_account(session, name, email, password)
     except ServiceError:
         _exit("Setup was refused.")

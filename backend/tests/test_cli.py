@@ -1,5 +1,6 @@
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -92,6 +93,41 @@ def test_a_blank_password_is_refused(database, monkeypatch, capsys):
     assert capsys.readouterr().err == "Setup was refused.\n"
     with open_session() as session:
         assert session.exec(select(User)).first() is None
+
+
+def test_overlapping_setup_runs_create_one_human(database, monkeypatch, capsys):
+    apply_migrations()
+    both_prompted = threading.Barrier(2)
+    answers = {"Name: ": "Ada", "Email: ": "ada@example.com"}
+    monkeypatch.setattr("builtins.input", lambda prompt: answers[prompt])
+
+    def read_password(prompt: str) -> str:
+        if prompt == "Password (again): ":
+            both_prompted.wait(timeout=5)
+        return "password-1"
+
+    monkeypatch.setattr("barrelvault.cli.getpass.getpass", read_password)
+    outcomes: list[object] = []
+
+    def run() -> None:
+        try:
+            main(["setup"])
+            outcomes.append("created")
+        except BaseException as exc:
+            outcomes.append(exc)
+
+    threads = [threading.Thread(target=run) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    exits = [outcome for outcome in outcomes if isinstance(outcome, SystemExit)]
+    assert outcomes.count("created") == 1
+    assert len(exits) == 1
+    assert exits[0].code == 1
+    assert "Setup was refused.\n" in capsys.readouterr().err
+    with open_session() as session:
+        assert len(session.exec(select(User)).all()) == 1
 
 
 def test_the_password_is_not_read_from_the_environment(database, monkeypatch):

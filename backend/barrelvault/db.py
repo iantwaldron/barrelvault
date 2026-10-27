@@ -32,6 +32,8 @@ def _build_engine(db_path: str) -> Engine:
 
     @event.listens_for(engine, "connect")
     def _configure_connection(dbapi_connection, _record):
+        # The driver would skip BEGIN before a SELECT. The begin hook issues it instead.
+        dbapi_connection.isolation_level = None
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.execute("PRAGMA journal_mode=WAL")
@@ -39,13 +41,24 @@ def _build_engine(db_path: str) -> Engine:
         cursor.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
         cursor.close()
 
+    @event.listens_for(engine, "begin")
+    def _begin(connection):
+        immediate = connection.get_execution_options().get("immediate", False)
+        connection.exec_driver_sql("BEGIN IMMEDIATE" if immediate else "BEGIN")
+
     return engine
 
 
 @contextmanager
-def open_session() -> Iterator[Session]:
-    """Open a database session, commit on success, and roll back on failure."""
+def open_session(*, immediate: bool = False) -> Iterator[Session]:
+    """Open a database session, commit on success, and roll back on failure.
+
+    An immediate session holds the write lock from its first statement, so a
+    check it reads cannot change before its write commits.
+    """
     session = Session(get_engine())
+    if immediate:
+        session.connection(execution_options={"immediate": True})
     try:
         yield session
         session.commit()

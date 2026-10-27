@@ -22,13 +22,16 @@ class IssuedKey(NamedTuple):
     key_expires_at: datetime
 
 
+def is_set_up(session: Session) -> bool:
+    """Any user row means setup has already run."""
+    return session.exec(select(User)).first() is not None
+
+
 def create_account(session: Session, name: str, email: str, password: str) -> Human:
-    """Create the first human. Setup is the only caller."""
+    """Create the first human. Setup is the only caller, in an immediate session."""
     if _blank(name) or _blank(email) or _blank(password):
         raise ServiceError("refused")
-    if session.exec(select(Human)).first() is not None:
-        raise ServiceError("refused")
-    if _name_taken(session, name):
+    if is_set_up(session):
         raise ServiceError("refused")
     user = User(name=name)
     session.add(user)

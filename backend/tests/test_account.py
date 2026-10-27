@@ -506,8 +506,8 @@ def test_reassign_moves_references_and_keeps_owned_by(session):
     assert history == (human.user_id,)
 
 
-def test_create_account_refuses_a_taken_name(session):
-    session.add(User(name="Ada"))
+def test_create_account_refuses_once_any_user_exists(session):
+    session.add(User(name="Bot"))
     session.flush()
     with pytest.raises(ServiceError):
         create_account(session, "Ada", "ada@example.com", "password-1")

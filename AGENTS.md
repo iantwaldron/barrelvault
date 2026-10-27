@@ -7,6 +7,7 @@
 - Change only what the current task needs.
 - Assume multi-tenancy. A single-tenant path hides a cross-account hole, so tests create a second tenant and refuse that access. SPEC.md defines the account boundary.
 - Implement behavior once, in a shared service layer.
+- Every function does real work for a real caller. Do not write one that always refuses, does nothing, or exists so a test has something to call. Enforce a rule where every write passes through it, and test it by attempting the write it forbids.
 - Use a stdlib virtualenv named `env` at `backend/env`. It is gitignored.
 - Pin each direct Python dependency as `~=X.Y.Z` in the requirements files. The minor stays fixed, and patch releases stay allowed. Changing the minor means editing that line.
 - Do not commit `.env` or `*.db`.

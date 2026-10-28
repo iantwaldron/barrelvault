@@ -228,6 +228,86 @@ The recorder sees ORM writes. A bulk statement or raw SQL that changes a recorde
 
 The history insert and the task write are one transaction. A rollback or a failed commit drops both, and the stored task stays as it was.
 
+## API
+
+The REST API is served under `/api` and speaks JSON. REST and MCP are thin adapters over the same service calls: each authenticates, reads its request, calls the service with the acting user, and shapes the result. Neither holds behavior the other lacks, apart from the duplicate warnings below. FastAPI generates the OpenAPI schema the frontend client is generated from, so every request and response has a declared model. Settings load once when the app starts.
+
+### Requests and responses
+
+The person's browser sends the session in a cookie named `barrelvault_session`. An agent sends it as `Authorization: Bearer <session secret>`. Login and the key exchange are the only routes that take no session. Every other route passes the presented secret to the one session check and refuses the call when it fails. A write authenticated by the cookie requires `Content-Type: application/json`, which a cross-site form cannot send.
+
+A response never carries a user id. A user appears as `{"name": ..., "kind": "person" | "agent"}`, so `created_by`, `updated_by`, `released_by`, and a history entry's editor are named. A datetime is an ISO 8601 string in UTC with milliseconds and a `Z`, such as `2026-11-06T23:00:00.000Z`. A datetime sent without an offset is read in the account's timezone. `notes` and `tags` are never null: `notes` is a string and `tags` is a list of tokens.
+
+An error has a status and a body of `{"error": <kind>, "message": <text>}`:
+
+| kind        | status | when                                                    |
+| ----------- | ------ | ------------------------------------------------------- |
+| `refused`   | 401    | a login, key exchange, or session check fails           |
+| `forbidden` | 403    | the acting user may not make the call                   |
+| `not_found` | 404    | no such row in the account, including another account's |
+| `invalid`   | 422    | an input fails a check, or the body does not parse      |
+| `conflict`  | 409    | the call does not fit the stored state                  |
+| `duplicate` | 409    | a create matched a task; the body adds that `task`      |
+| `attached`  | 409    | an agent delete found attached work; the person chooses |
+
+A `refused` body always reads `refused`, whatever failed.
+
+### Session and account
+
+| method and path        | body                  | returns                                                   |
+| ---------------------- | --------------------- | --------------------------------------------------------- |
+| `POST /api/login`      | `email`, `password`   | 204, and sets the cookie                                  |
+| `POST /api/logout`     |                       | 204, deletes the session row and clears the cookie        |
+| `POST /api/exchange`   | `key`                 | 200, `token` and `expires_at`                             |
+| `GET /api/account`     |                       | the acting user's `name` and `kind`, the account's `email` and `timezone` |
+| `PATCH /api/account`   | `timezone`            | the account, as above; the person only                    |
+
+### Agents
+
+Only the person calls these. An agent is addressed by its name, which is unique in the account.
+
+| method and path                       | returns                                                  |
+| ------------------------------------- | -------------------------------------------------------- |
+| `GET /api/agents`                     | each agent's `name`, `retired_at`, and `key_expires_at`, retired agents included |
+| `POST /api/agents` with `name`        | 201, the agent                                           |
+| `POST /api/agents/{name}/key`         | 201, `key` and `key_expires_at`; the key is shown once   |
+| `POST /api/agents/{name}/key/roll`    | 201, the new `key` and `key_expires_at`                  |
+| `POST /api/agents/{name}/retire`      | the agent                                                |
+| `POST /api/agents/{name}/reassign`    | 204                                                      |
+| `DELETE /api/agents/{name}`           | 204, or `attached` when the person must reassign or retire |
+
+### Tasks
+
+A task response carries every column but the user ids and `owned_by`, with `created_by` and `updated_by` named, and adds `effectively_dropped`, `blocked`, and `dropped_reason`. A list or tree entry leaves out `notes` and `dropped_reason`, and adds `matched`.
+
+| method and path                 | body or query                                      | returns                                  |
+| ------------------------------- | -------------------------------------------------- | ---------------------------------------- |
+| `GET /api/tasks`                | `parent`, `tags`, `open`                           | one level, matches only                  |
+| `GET /api/tasks/tree`           | `parent`, `tags`, `open`                           | parents first, each match with its ancestors |
+| `GET /api/tasks/{id}`           |                                                    | the task                                 |
+| `POST /api/tasks`               | the fields, and `allow_duplicate`                  | 201, the task, or `duplicate`            |
+| `PATCH /api/tasks/{id}`         | the fields sent, `append_notes`, `add_tags`, `remove_tags`, `release_blocks`, `expected_updated_at` | the task |
+| `POST /api/tasks/{id}/drop`     | `reason`, `release_blocks`, `expected_updated_at`  | the task                                 |
+| `DELETE /api/tasks/{id}`        |                                                    | 204                                      |
+| `GET /api/tasks/{id}/history`   |                                                    | the snapshots in write order, each with its editor named |
+
+`parent` absent means the roots. `tags` is a whitespace-separated filter and `open=true` keeps open work. A field omitted from a `PATCH` body is left as stored, and a field sent as `null` is cleared. The fields are `title`, `notes`, `tags` (a string, stored by the save helper), `status`, `estimate_minutes`, `due_at`, and `parent_id`.
+
+### Blocks
+
+| method and path                    | body       | returns                         |
+| ---------------------------------- | ---------- | ------------------------------- |
+| `GET /api/tasks/{id}/blocks`       |            | the task's blocks, oldest first |
+| `POST /api/tasks/{id}/blocks`      | `reason`   | 201, the block                  |
+| `PATCH /api/blocks/{id}`           | `reason`   | the block                       |
+| `POST /api/blocks/{id}/release`    |            | the block                       |
+
+A block response carries `id`, `task_id`, `reason`, `created_by` and `released_by` named, `created_at`, and `released_at`.
+
+### Tests
+
+Every route is tested through FastAPI's test client against the production engine setup. Tests cover each route's success, a second account refused on every task, block, and agent route, an agent session refused on every person-only route, a call with no session or an expired one refused as `refused`, a cookie write without a JSON content type refused, each error kind's status and body, a response that carries no user id anywhere, and a datetime returned in UTC with milliseconds and a `Z`.
+
 ## Out of scope for v0.1
 
 Multi-user, public hosting, notifications, recurring tasks, mobile app, desktop wrapper. A `source` field for where a task came from, such as email or a call. Prioritization as a whole, including `value_tier`, rank, and a stored top-three. Goal and comments. Time entries, including timers and an hours report. Per-agent permission control. A person's setting to skip the duplicate confirmation. Assigning a task to a user, to be re-evaluated if agents start duplicating work; until then a `claimed:<name>` tag serves.

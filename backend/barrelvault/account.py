@@ -143,6 +143,12 @@ class _key_write:
         self.session.info.pop(KEY_WRITE, None)
 
 
+def actor_id(actor: User) -> int:
+    """The acting user's id. A stored user always has one."""
+    assert actor.id is not None, "a stored user has an id"
+    return actor.id
+
+
 def account_of(session: Session, actor: User) -> Human:
     """The person whose account the actor acts in: the actor, or an agent's owner."""
     human = session.get(Human, actor.id)

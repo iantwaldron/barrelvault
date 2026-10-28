@@ -13,7 +13,7 @@ from typing import Any, Final
 from sqlalchemy import select as sql_select
 from sqlmodel import Session, col, select
 
-from barrelvault.account import account_of
+from barrelvault.account import account_of, actor_id
 from barrelvault.errors import Conflict, Duplicate, Invalid, NotFound
 from barrelvault.models import Block, Task, TaskHistory, User
 from barrelvault.notes import append_note, dropped_block, dropped_reason
@@ -94,7 +94,7 @@ def create_task(
     clean_title = normalize_title(title)
     stored_due = to_utc(due_at, owner.timezone) if due_at is not None else None
     if parent_id is not None:
-        _task(session, owner.user_id, parent_id)
+        task_in_account(session, owner.user_id, parent_id)
     if not allow_duplicate:
         _check_duplicate(session, owner.user_id, clean_title, stored_due)
     now = datetime.now(UTC)
@@ -106,9 +106,9 @@ def create_task(
         status=_check_status(status),
         estimate_minutes=_check_estimate(estimate_minutes),
         due_at=stored_due,
-        created_by=_id(actor),
+        created_by=actor_id(actor),
         created_at=now,
-        updated_by=_id(actor),
+        updated_by=actor_id(actor),
         updated_at=now,
         owned_by=owner.user_id,
     )
@@ -119,7 +119,7 @@ def create_task(
 
 def get_task(session: Session, actor: User, task_id: int) -> TaskDetail:
     owner = account_of(session, actor)
-    return _detail(session, _task(session, owner.user_id, task_id))
+    return _detail(session, task_in_account(session, owner.user_id, task_id))
 
 
 def list_tasks(
@@ -178,7 +178,7 @@ def update_task(
     expected_updated_at refuses the update as a conflict when the task changed since.
     """
     owner = account_of(session, actor)
-    task = _task(session, owner.user_id, task_id)
+    task = task_in_account(session, owner.user_id, task_id)
     _check_current(task, expected_updated_at)
     if notes is not UNSET and append_notes is not None:
         raise Invalid("send notes or append_notes, not both")
@@ -219,7 +219,7 @@ def drop_task(
 ) -> TaskDetail:
     """Set the task to dropped. A reason is appended to notes as a dropped block."""
     owner = account_of(session, actor)
-    task = _task(session, owner.user_id, task_id)
+    task = task_in_account(session, owner.user_id, task_id)
     _check_current(task, expected_updated_at)
     changes: dict[str, Any] = {"status": DROPPED}
     if reason is not None and reason.strip():
@@ -230,13 +230,13 @@ def drop_task(
 def delete_task(session: Session, actor: User, task_id: int) -> None:
     """Delete the task. The cascade takes its subtree, blocks, and history."""
     owner = account_of(session, actor)
-    session.delete(_task(session, owner.user_id, task_id))
+    session.delete(task_in_account(session, owner.user_id, task_id))
     session.flush()
 
 
 def task_history(session: Session, actor: User, task_id: int) -> list[HistoryEntry]:
     owner = account_of(session, actor)
-    _task(session, owner.user_id, task_id)
+    task_in_account(session, owner.user_id, task_id)
     query = (
         select(TaskHistory)
         .where(TaskHistory.task_id == task_id)
@@ -250,7 +250,7 @@ def task_history(session: Session, actor: User, task_id: int) -> list[HistoryEnt
 def touch(task: Task, actor: User) -> None:
     """Mark the task changed by the actor. A block change calls this, and it writes no snapshot."""
     task.updated_at = datetime.now(UTC)
-    task.updated_by = _id(actor)
+    task.updated_by = actor_id(actor)
 
 
 def load_tree(session: Session, account_id: int) -> Tree:
@@ -363,7 +363,7 @@ def _release_or_refuse(
         raise Conflict("task is blocked")
     now = datetime.now(UTC)
     for block in blocks:
-        block.released_by = _id(actor)
+        block.released_by = actor_id(actor)
         block.released_at = now
         session.add(block)
     # The releases go first, since the schema refuses a status change on a blocked task.
@@ -415,12 +415,7 @@ def _check_estimate(estimate_minutes: int | None) -> int | None:
     return estimate_minutes
 
 
-def _id(user: User) -> int:
-    assert user.id is not None, "a stored user has an id"
-    return user.id
-
-
-def _task(session: Session, account_id: int, task_id: int) -> Task:
+def task_in_account(session: Session, account_id: int, task_id: int) -> Task:
     """A task in the account. A task in another account is not found."""
     task = session.exec(
         select(Task).where(Task.id == task_id, Task.owned_by == account_id)

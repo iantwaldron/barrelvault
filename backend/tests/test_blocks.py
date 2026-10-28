@@ -39,20 +39,31 @@ def test_a_block_marks_the_task_blocked_and_changed_without_a_snapshot(session, 
     blocked = get_task(session, ada, task.id)
     assert blocked.blocked
     assert blocked.updated_by == bot.id and blocked.updated_at > task.updated_at
+    before_release = get_task(session, ada, task.id)
     released = release_block(session, ada, block.id)
     assert released.released_by == ada.id and released.released_at is not None
-    assert not get_task(session, ada, task.id).blocked
+    after_release = get_task(session, ada, task.id)
+    assert not after_release.blocked
+    assert after_release.updated_by == ada.id
+    assert after_release.updated_at > before_release.updated_at
     assert len(task_history(session, ada, task.id)) == 1
 
 
 def test_a_block_change_makes_an_earlier_updated_at_stale(session, ada, bot):
     task = create_task(session, ada, "Call Chad")
-    read = get_task(session, bot, task.id)
-    add_block(session, ada, task.id, "Waiting on Chad")
-    with pytest.raises(Conflict):
-        update_task(
-            session, bot, task.id, title="Call Chad back", expected_updated_at=read.updated_at
-        )
+    block = add_block(session, ada, task.id, "Waiting on Chad")
+    changes = (
+        lambda: add_block(session, ada, task.id, "Waiting on Sam"),
+        lambda: edit_block_reason(session, ada, block.id, "Waiting on Chad's reply"),
+        lambda: release_block(session, ada, block.id),
+    )
+    for change in changes:
+        read = get_task(session, bot, task.id)
+        change()
+        with pytest.raises(Conflict):
+            update_task(
+                session, bot, task.id, title="Call back", expected_updated_at=read.updated_at
+            )
     assert get_task(session, ada, task.id).title == "Call Chad"
 
 
@@ -147,3 +158,20 @@ def test_the_schema_refuses_a_status_change_on_a_blocked_task(session, ada):
         session.connection().execute(
             text("UPDATE task SET status = 2 WHERE id = :id"), {"id": task.id}
         )
+
+
+def test_an_agent_cannot_reach_another_accounts_blocks(session, ada, bot):
+    _bea_id, bea_secret = second_account(session)
+    bea = act_as(session, bea_secret)
+    beas_task = create_task(session, bea, "Bea's task")
+    beas_block = add_block(session, bea, beas_task.id, "Waiting")
+    calls = (
+        lambda: add_block(session, bot, beas_task.id, "Taken"),
+        lambda: release_block(session, bot, beas_block.id),
+        lambda: edit_block_reason(session, bot, beas_block.id, "Taken"),
+        lambda: list_blocks(session, bot, beas_task.id),
+    )
+    for call in calls:
+        with pytest.raises(NotFound):
+            call()
+    assert blocks_to_follow_up(session, bot) == []

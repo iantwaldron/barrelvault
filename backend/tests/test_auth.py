@@ -96,6 +96,7 @@ def test_every_auth_refusal_is_the_same(session):
     calls = (
         lambda: login(session, "ada@example.com", "wrong", session_length=SESSION_LENGTH),
         lambda: login(session, "missing@example.com", "password-1", session_length=SESSION_LENGTH),
+        lambda: login(session, "not an address", "password-1", session_length=SESSION_LENGTH),
         lambda: exchange_key(session, "missing-key", session_length=SESSION_LENGTH),
         lambda: exchange_key(session, secret, session_length=SESSION_LENGTH),
         lambda: authenticate(session, issued.key),
@@ -400,3 +401,13 @@ def test_overlapping_mints_leave_one_session(database):
 def _issued_key(session: Session, secret: str) -> str:
     _agent, issued = live_agent(session, secret, "Keyed")
     return issued.key
+
+
+def test_the_email_check_makes_no_network_call(session, monkeypatch):
+    def no_network(*_args, **_kwargs):
+        raise AssertionError("the email check reached the network")
+
+    monkeypatch.setattr("socket.getaddrinfo", no_network)
+    monkeypatch.setattr("dns.resolver.resolve", no_network)
+    create_account(session, "Ada", "ada@example.com", "password-1", "America/Chicago")
+    assert login(session, "Ada@Example.com", "password-1", session_length=SESSION_LENGTH)

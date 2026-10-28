@@ -169,20 +169,41 @@ def test_null_text_columns_read_as_empty(session, ada):
     assert (detail.notes, detail.tags) == ("", [])
     [summary] = list_tasks(session, ada)
     assert summary.tags == []
+    assert list_tasks(session, ada, tags="home") == []
+    unchanged = update_task(session, ada, raw_id, notes="")
+    assert unchanged.updated_at == detail.updated_at
+    assert update_task(session, ada, raw_id, add="Home").tags == ["home"]
+    assert [task.id for task in list_tasks(session, ada, tags="home")] == [raw_id]
 
 
 def test_a_partial_update_leaves_the_other_fields(session, ada):
+    parent = create_task(session, ada, "Project")
     task = create_task(
-        session, ada, "Call Chad", notes="About the deal.", tags="deal:chad", due_at=DUE
-    )
-    updated = update_task(session, ada, task.id, status=IN_PROGRESS)
-    assert (updated.title, updated.notes, updated.tags, updated.due_at) == (
+        session,
+        ada,
         "Call Chad",
-        "About the deal.",
-        ["deal:chad"],
-        DUE,
+        parent_id=parent.id,
+        notes="About the deal.",
+        tags="deal:chad",
+        estimate_minutes=30,
+        due_at=DUE,
     )
-    assert updated.status == IN_PROGRESS
+
+    def kept(detail) -> tuple:
+        return (
+            detail.parent_id,
+            detail.notes,
+            detail.tags,
+            detail.estimate_minutes,
+            detail.due_at,
+        )
+
+    by_status = update_task(session, ada, task.id, status=IN_PROGRESS)
+    assert by_status.status == IN_PROGRESS and by_status.title == "Call Chad"
+    assert kept(by_status) == (parent.id, "About the deal.", ["deal:chad"], 30, DUE)
+    by_title = update_task(session, ada, task.id, title="Call Chad back")
+    assert by_title.status == IN_PROGRESS
+    assert kept(by_title) == (parent.id, "About the deal.", ["deal:chad"], 30, DUE)
 
 
 def test_an_append_and_a_tag_add_keep_a_change_made_after_the_read(session, ada, bot):
@@ -248,7 +269,15 @@ def test_history_reads_each_change_in_order(session, ada, bot):
     assert entries[0].state["due_at"] == "2026-11-06T23:00:00+00:00"
     assert entries[-1].state["status"] == IN_PROGRESS
     newest = get_task(session, ada, task.id)
-    assert entries[-1].state["title"] == newest.title
+    assert entries[-1].state == {
+        "parent_id": newest.parent_id,
+        "title": newest.title,
+        "notes": newest.notes,
+        "tags": " ".join(newest.tags),
+        "status": newest.status,
+        "estimate_minutes": newest.estimate_minutes,
+        "due_at": newest.due_at.isoformat(),
+    }
 
 
 def test_lists_are_one_level_in_order_and_filter_by_tag_and_open(session, ada):
@@ -482,3 +511,56 @@ def test_service_timestamps_are_whole_milliseconds(session, ada):
     assert task.created_at.microsecond % 1000 == 0
     echoed = datetime.fromisoformat(task.updated_at.isoformat(timespec="milliseconds"))
     assert update_task(session, ada, task.id, title="Echoed", expected_updated_at=echoed)
+
+
+def test_a_tag_change_moves_updated_at_and_writes_a_snapshot(session, ada, bot):
+    task = create_task(session, ada, "Call Chad", tags="deal:chad")
+    tagged = update_task(session, bot, task.id, add="urgent")
+    assert tagged.updated_at > task.updated_at and tagged.updated_by == bot.id
+    entries = task_history(session, ada, task.id)
+    assert len(entries) == 2 and entries[-1].state["tags"] == "deal:chad urgent"
+
+
+def test_every_returned_datetime_is_in_utc(session, ada):
+    task = create_task(session, ada, "Call Chad", due_at=datetime(2026, 7, 1, 17))
+    child = create_task(session, ada, "Step", parent_id=task.id)
+    views = [get_task(session, ada, task.id), *list_tasks(session, ada), *task_tree(session, ada)]
+    for view in views:
+        for moment in (view.created_at, view.updated_at, view.due_at):
+            if moment is not None:
+                assert moment.utcoffset() == timedelta(0)
+    assert child.created_at.utcoffset() == timedelta(0)
+    assert all(
+        e.created_at.utcoffset() == timedelta(0) for e in task_history(session, ada, task.id)
+    )
+
+
+def test_a_failed_flush_drops_the_task_change_and_its_snapshot(session, ada):
+    task = create_task(session, ada, "Call Chad")
+    other = create_task(session, ada, "Other")
+    session.commit()
+    stored, broken = session.get(Task, task.id), session.get(Task, other.id)
+    stored.title = "Changed"
+    broken.estimate_minutes = -1
+    with pytest.raises(IntegrityError):
+        session.flush()
+    session.rollback()
+    assert get_task(session, ada, task.id).title == "Call Chad"
+    assert len(task_history(session, ada, task.id)) == 1
+
+
+def test_an_agent_cannot_reach_another_accounts_tasks(session, ada, bot):
+    _bea_id, bea_secret = second_account(session)
+    bea = act_as(session, bea_secret)
+    beas = create_task(session, bea, "Bea's task")
+    calls = (
+        lambda: get_task(session, bot, beas.id),
+        lambda: update_task(session, bot, beas.id, title="Taken"),
+        lambda: drop_task(session, bot, beas.id),
+        lambda: delete_task(session, bot, beas.id),
+        lambda: create_task(session, bot, "Nested", parent_id=beas.id),
+    )
+    for call in calls:
+        with pytest.raises(NotFound):
+            call()
+    assert task_tree(session, bot) == []

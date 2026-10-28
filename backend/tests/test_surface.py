@@ -96,3 +96,16 @@ def test_a_confirmation_that_fails_keeps_its_warning(session, ada):
     with pytest.raises(Invalid):
         warnings.create(session, ada, "Pay rent", allow_duplicate=True, estimate_minutes=-1)
     assert warnings.create(session, ada, "Pay rent", allow_duplicate=True)
+
+
+def test_the_default_window_is_two_minutes(session, ada):
+    clock = Clock()
+    warnings = DuplicateWarnings(clock=clock)
+    for title in ("Kept", "Lapsed"):
+        create_task(session, ada, title)
+        with pytest.raises(Duplicate):
+            warnings.create(session, ada, title)
+    clock.now += 119
+    assert warnings.create(session, ada, "Kept", allow_duplicate=True)
+    clock.now += 2
+    _refused_first(warnings, session, ada, "Lapsed")

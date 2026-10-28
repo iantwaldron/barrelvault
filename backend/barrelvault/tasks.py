@@ -6,7 +6,7 @@ null text column.
 """
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Final
 
 from sqlalchemy import select as sql_select
@@ -180,8 +180,12 @@ def task_history(session: Session, actor: User, task_id: int) -> list[HistoryEnt
 
 
 def touch(task: Task, actor: User) -> None:
-    """Mark the task changed by the actor. A block change calls this, and it writes no snapshot."""
-    task.updated_at = now()
+    """Mark the task changed by the actor. A block change calls this, and it writes no snapshot.
+
+    Stored times are whole milliseconds, so two changes inside one millisecond would
+    share a time. updated_at moves at least one millisecond past the last change.
+    """
+    task.updated_at = max(now(), as_utc(task.updated_at) + timedelta(milliseconds=1))
     task.updated_by = actor_id(actor)
 
 

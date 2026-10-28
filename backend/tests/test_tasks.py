@@ -308,3 +308,11 @@ def test_open_for_counts_from_creation(session, ada):
     task = create_task(session, ada, "Call Chad")
     stored = session.get(Task, task.id)
     assert stored.open_for(task.created_at + timedelta(minutes=5)) == timedelta(minutes=5)
+
+
+def test_updated_at_moves_on_every_change_even_inside_one_millisecond(session, ada, monkeypatch):
+    task = create_task(session, ada, "Call Chad")
+    monkeypatch.setattr("barrelvault.tasks.now", lambda: task.updated_at)
+    first = update_task(session, ada, task.id, title="One")
+    second = update_task(session, ada, task.id, title="Two")
+    assert task.updated_at < first.updated_at < second.updated_at

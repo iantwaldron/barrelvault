@@ -2,13 +2,11 @@ import hashlib
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import text, update
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from barrelvault import auth
-from barrelvault.auth import ServiceError, authenticate, exchange_key
-from barrelvault.guards import SETUP_WRITE
-from barrelvault.models import Agent, Human, Token, User
 from barrelvault.account import (
     add_agent,
     create_account,
@@ -18,7 +16,18 @@ from barrelvault.account import (
     retire_agent,
     roll_key,
 )
-from tests.support import KEY_LENGTH, SESSION_LENGTH, act_as, live_agent, make_account, second_account, update_agent
+from barrelvault.auth import ServiceError, authenticate, exchange_key
+from barrelvault.guards import SETUP_WRITE
+from barrelvault.models import Agent, Human, Token, User
+from tests.support import (
+    KEY_LENGTH,
+    SESSION_LENGTH,
+    act_as,
+    live_agent,
+    make_account,
+    second_account,
+    update_agent,
+)
 
 
 def test_create_account_stores_one_human(session):
@@ -206,14 +215,33 @@ def test_a_session_that_never_called_the_service_is_guarded(session):
     plain.rollback()
     stored = plain.get(Agent, agent.user_id)
     stored.owner_id = agent.user_id
-    with pytest.raises(ServiceError):
+    with pytest.raises(IntegrityError):
         plain.commit()
     plain.rollback()
     token = plain.exec(select(Token)).first()
     token.expires_at = token.expires_at + timedelta(days=1)
-    with pytest.raises(ServiceError):
+    with pytest.raises(IntegrityError):
         plain.commit()
     plain.close()
+
+
+def test_a_bulk_update_cannot_skip_the_schema_rules(session):
+    _human, secret = make_account(session)
+    agent, _issued = live_agent(session, secret)
+    session.commit()
+    updates = (
+        {"owner_id": agent.user_id},
+        {"key_expires_at": None},
+        {"retired_at": datetime.now(UTC)},
+    )
+    for values in updates:
+        with pytest.raises(IntegrityError):
+            session.execute(update(Agent).where(Agent.user_id == agent.user_id).values(**values))
+        session.rollback()
+    stored = session.get(Agent, agent.user_id)
+    assert stored.owner_id == _human.user_id
+    assert stored.key_expires_at is not None
+    assert stored.retired_at is None
 
 
 def test_owner_must_be_the_human(session):
@@ -226,12 +254,12 @@ def test_owner_must_be_the_human(session):
         session.add(user)
         session.flush()
         session.add(Agent(user_id=user.id, owner_id=owner_id))
-        with pytest.raises(ServiceError):
+        with pytest.raises(IntegrityError):
             session.flush()
         session.rollback()
     agent = session.get(Agent, agent.user_id)
     agent.owner_id = bea_id
-    with pytest.raises(ServiceError):
+    with pytest.raises(IntegrityError):
         session.flush()
     session.rollback()
     assert session.get(Agent, agent.user_id).owner_id == human.user_id
@@ -243,7 +271,7 @@ def test_an_unauthenticated_session_needs_a_human_owner(session):
     session.add(user)
     session.flush()
     session.add(Agent(user_id=user.id, owner_id=user.id))
-    with pytest.raises(ServiceError):
+    with pytest.raises(IntegrityError):
         session.flush()
     session.rollback()
     bea_id, _bea_secret = second_account(session)
@@ -260,31 +288,40 @@ def test_profile_changes_are_refused(session):
     agent = add_agent(session, act_as(session, secret), "Bot")
     session.commit()
 
-    def refused(*writes) -> None:
+    def refused(error: type[Exception], *writes) -> None:
         for write in writes:
             write()
-        with pytest.raises(ServiceError):
+        with pytest.raises(error):
             session.flush()
         session.rollback()
 
-    stored_human = lambda: session.get(Human, human.user_id)
-    stored_agent = lambda: session.get(Agent, agent.user_id)
+    def human_row(user_id: int) -> Human:
+        return Human(user_id=user_id, email="bot@example.com", password_hash="hash")
+
+    # A human user cannot become an agent, by replacement or beside its profile.
     refused(
-        lambda: session.delete(stored_human()),
+        IntegrityError,
+        lambda: session.delete(session.get(Human, human.user_id)),
         lambda: session.add(Agent(user_id=human.user_id, owner_id=human.user_id)),
     )
+    refused(IntegrityError, lambda: session.add(Agent(user_id=human.user_id, owner_id=human.user_id)))
+    # An agent user cannot become a human. Only setup adds a Human through the ORM.
     refused(
-        lambda: session.delete(stored_agent()),
-        lambda: session.add(
-            Human(user_id=agent.user_id, email="bot@example.com", password_hash="hash")
-        ),
+        ServiceError,
+        lambda: session.delete(session.get(Agent, agent.user_id)),
+        lambda: session.add(human_row(agent.user_id)),
     )
-    refused(lambda: session.add(Agent(user_id=human.user_id, owner_id=human.user_id)))
-    refused(
-        lambda: session.add(
-            Human(user_id=agent.user_id, email="bot@example.com", password_hash="hash")
+    refused(ServiceError, lambda: session.add(human_row(agent.user_id)))
+    # The schema refuses it too, for a write that skips the ORM.
+    with pytest.raises(IntegrityError):
+        session.connection().execute(
+            text(
+                "INSERT INTO human (user_id, email, password_hash) "
+                "VALUES (:user_id, 'bot@example.com', 'hash')"
+            ),
+            {"user_id": agent.user_id},
         )
-    )
+    session.rollback()
     assert session.get(Human, human.user_id) is not None
     assert session.get(Agent, human.user_id) is None
     assert session.get(Agent, agent.user_id) is not None

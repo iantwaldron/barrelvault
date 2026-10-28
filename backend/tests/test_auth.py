@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import event, text
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, SQLModel, select
 
 from barrelvault import auth, db
@@ -16,7 +17,14 @@ from barrelvault.auth import (
     logout,
 )
 from barrelvault.models import Token, User
-from tests.support import SESSION_LENGTH, act_as, live_agent, make_account, update_agent, update_token
+from tests.support import (
+    SESSION_LENGTH,
+    act_as,
+    live_agent,
+    make_account,
+    set_token_expiry,
+    update_agent,
+)
 
 
 def _tokens(session: Session) -> list[Token]:
@@ -145,7 +153,7 @@ def test_a_mint_without_an_expiry_is_refused(session, monkeypatch):
         return "raw"
 
     monkeypatch.setattr(auth.Token, "generate_secret", generate_secret)
-    with pytest.raises(ServiceError):
+    with pytest.raises(IntegrityError):
         login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
     session.rollback()
     assert session.exec(select(Token).where(Token.secret_hash == "unfinished")).first() is None
@@ -156,30 +164,34 @@ def test_session_field_changes_are_refused(session):
     create_account(session, "Ada", "ada@example.com", "password-1")
     secret = login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
     session.commit()
+    original = _tokens(session)[0]
+    changes = {
+        "expires_at": None,
+        "secret_hash": "other",
+        "user_id": original.user_id + 1,
+    }
+    for name, value in changes.items():
+        token = _tokens(session)[0]
+        setattr(token, name, value)
+        with pytest.raises(IntegrityError):
+            session.flush()
+        session.rollback()
     token = _tokens(session)[0]
-    original_expiry = token.expires_at
-    original_hash = token.secret_hash
-    original_user = token.user_id
-    token.expires_at = None
-    with pytest.raises(ServiceError):
+    token.expires_at = original.expires_at + timedelta(seconds=1)
+    with pytest.raises(IntegrityError):
         session.flush()
     session.rollback()
-    token = session.exec(select(Token).where(Token.secret_hash == original_hash)).one()
-    token.expires_at = original_expiry + timedelta(seconds=1)
-    with pytest.raises(ServiceError):
-        session.flush()
-    token.secret_hash = "other"
-    with pytest.raises(ServiceError):
-        session.flush()
-    token.user_id = original_user + 1
-    with pytest.raises(ServiceError):
-        session.flush()
+    # The trigger refuses raw SQL too, not only the ORM.
+    with pytest.raises(IntegrityError):
+        session.connection().execute(text("UPDATE token SET secret_hash = 'raw'"))
     session.rollback()
     kept = _tokens(session)[0]
-    assert kept.expires_at == original_expiry
-    assert kept.secret_hash == original_hash
-    assert kept.user_id == original_user
-    assert authenticate(session, secret).id == original_user
+    assert (kept.expires_at, kept.secret_hash, kept.user_id) == (
+        original.expires_at,
+        original.secret_hash,
+        original.user_id,
+    )
+    assert authenticate(session, secret).id == original.user_id
 
 
 def test_authenticate_refuses_unknown_and_expired_secrets(session):
@@ -190,11 +202,7 @@ def test_authenticate_refuses_unknown_and_expired_secrets(session):
     with pytest.raises(ServiceError):
         authenticate(session, _issued_key(session, secret))
     token = _tokens(session)[0]
-    update_token(
-        session,
-        token.user_id,
-        expires_at=(datetime.now(UTC) - timedelta(seconds=1)).isoformat(),
-    )
+    set_token_expiry(session, token.user_id, (datetime.now(UTC) - timedelta(seconds=1)).isoformat())
     with pytest.raises(ServiceError):
         authenticate(session, secret)
     assert len(_tokens(session)) == 1
@@ -234,16 +242,6 @@ def test_a_dead_agent_key_deletes_that_session_only(session):
     assert authenticate(session, secret).id == human.user_id
 
 
-def test_a_retired_agent_session_is_deleted_and_refused(session):
-    human, secret = make_account(session)
-    agent, issued = live_agent(session, secret)
-    agent_secret = exchange_key(session, issued.key, session_length=SESSION_LENGTH)
-    update_agent(session, agent.user_id, retired_at=datetime.now(UTC).isoformat())
-    session.commit()
-    with pytest.raises(ServiceError):
-        authenticate(session, agent_secret)
-    assert session.exec(select(Token).where(Token.user_id == agent.user_id)).first() is None
-    assert authenticate(session, secret).id == human.user_id
 
 
 def test_dead_agent_key_stays_deleted_when_the_request_rolls_back(database):
@@ -313,7 +311,7 @@ def test_blank_secrets_are_refused(session):
 def test_a_new_session_without_expiry_is_refused(session):
     human = create_account(session, "Ada", "ada@example.com", "password-1")
     session.add(Token(user_id=human.user_id, secret_hash="hash"))
-    with pytest.raises(ServiceError):
+    with pytest.raises(IntegrityError):
         session.flush()
 
 
@@ -321,7 +319,7 @@ def test_a_naive_expiry_is_still_compared_in_utc(session):
     create_account(session, "Ada", "ada@example.com", "password-1")
     secret = login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
     token = _tokens(session)[0]
-    update_token(session, token.user_id, expires_at="2000-01-01 00:00:00")
+    set_token_expiry(session, token.user_id, "2000-01-01 00:00:00")
     with pytest.raises(ServiceError):
         authenticate(session, secret)
     assert len(_tokens(session)) == 1

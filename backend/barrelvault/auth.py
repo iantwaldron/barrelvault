@@ -6,7 +6,8 @@ from datetime import UTC, datetime
 from pwdlib import PasswordHash
 from pwdlib.exceptions import UnknownHashError
 from sqlalchemy import delete, event
-from sqlalchemy.orm import Session as OrmSession, SessionTransaction
+from sqlalchemy.orm import Session as OrmSession
+from sqlalchemy.orm import SessionTransaction
 from sqlmodel import Session, select
 
 from barrelvault.errors import ServiceError
@@ -38,9 +39,8 @@ def exchange_key(session: Session, key: str, *, session_length: int) -> str:
     if _blank(key):
         raise ServiceError("refused")
     agent = session.exec(select(Agent).where(Agent.key_hash == _digest(key))).one_or_none()
-    if agent is None or agent.retired_at is not None:
-        raise ServiceError("refused")
-    if agent.key_expires_at is None or _as_utc(agent.key_expires_at) <= datetime.now(UTC):
+    # A retired agent has no key, so it never matches here.
+    if agent is None or _agent_key_is_dead(agent):
         raise ServiceError("refused")
     return _mint(session, agent.user_id, session_length)
 
@@ -109,9 +109,8 @@ def _delete_dead_sessions(session: OrmSession, transaction: SessionTransaction) 
 
 
 def _agent_key_is_dead(agent: Agent) -> bool:
-    if agent.retired_at is not None:
-        return True
-    if agent.key_hash is None or agent.key_expires_at is None:
+    """No key, which includes a retired agent, or a key past its expiry."""
+    if agent.key_expires_at is None:
         return True
     return _as_utc(agent.key_expires_at) <= datetime.now(UTC)
 

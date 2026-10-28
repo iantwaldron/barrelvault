@@ -167,6 +167,31 @@ def test_migrations_build_the_model_schema(database):
     assert version == "0001"
 
 
+def test_migrations_build_the_model_triggers_and_checks(database, engine):
+    """compare_metadata skips triggers and CHECK constraints, so compare them here."""
+    apply_migrations()
+
+    def schema(connection) -> dict[str, set]:
+        rows = connection.execute(
+            text("SELECT type, name, sql FROM sqlite_master WHERE type IN ('trigger', 'table')")
+        ).all()
+        return {
+            "triggers": {(name, sql) for kind, name, sql in rows if kind == "trigger"},
+            "checks": {
+                name
+                for kind, _table, sql in rows
+                if kind == "table"
+                for name in ("ck_agent_key_pair", "ck_agent_retired_without_key")
+                if name in sql
+            },
+        }
+
+    with get_engine().connect() as migrated, engine.connect() as modeled:
+        assert schema(migrated) == schema(modeled)
+        assert len(schema(migrated)["triggers"]) == 5
+        assert len(schema(migrated)["checks"]) == 2
+
+
 def test_migrations_downgrade_to_an_empty_database(database):
     apply_migrations()
     command.downgrade(migration_config(), "base")

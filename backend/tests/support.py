@@ -50,8 +50,24 @@ def update_agent(session: Session, user_id: int, **values: object) -> None:
     update_row(session, "agent", user_id, values)
 
 
-def update_token(session: Session, user_id: int, **values: object) -> None:
-    update_row(session, "token", user_id, values)
+def set_token_expiry(session: Session, user_id: int, expires_at: str) -> None:
+    """A session row is fixed, so swap it for a copy with this expiry."""
+    connection = session.connection()
+    row = dict(
+        connection.execute(
+            text("SELECT * FROM token WHERE user_id = :user_id"), {"user_id": user_id}
+        ).mappings().one()
+    )
+    connection.execute(text("DELETE FROM token WHERE user_id = :user_id"), {"user_id": user_id})
+    row["expires_at"] = expires_at
+    connection.execute(
+        text(
+            "INSERT INTO token (id, user_id, secret_hash, created_at, expires_at) "
+            "VALUES (:id, :user_id, :secret_hash, :created_at, :expires_at)"
+        ),
+        row,
+    )
+    session.expire_all()
 
 
 def update_row(session: Session, table: str, user_id: int, values: dict[str, object]) -> None:

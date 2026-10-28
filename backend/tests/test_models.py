@@ -171,8 +171,7 @@ def test_agents_include_retired(session):
 def test_generate_key_stores_the_hash_and_expiry(session):
     owner = _human(session)
     user = _user(session, "Bot")
-    agent = Agent(user_id=user.id, owner_id=owner.user_id, retired_at=datetime.now(UTC))
-    retired_at = agent.retired_at
+    agent = Agent(user_id=user.id, owner_id=owner.user_id)
     before = datetime.now(UTC)
     raw = agent.generate_key(100)
     after = datetime.now(UTC)
@@ -192,7 +191,6 @@ def test_generate_key_stores_the_hash_and_expiry(session):
     assert agent.key_expires_at is not None
     assert before + timedelta(seconds=100) <= agent.key_expires_at
     assert agent.key_expires_at <= after + timedelta(seconds=100)
-    assert agent.retired_at == retired_at
 
 
 def test_generate_key_replaces_the_previous_key(session):

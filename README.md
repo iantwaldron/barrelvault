@@ -8,9 +8,18 @@ From `backend/`, with the virtualenv at `backend/env`:
 
 ```sh
 python3 -m venv env
-env/bin/pip install -r requirements.dev.txt
+env/bin/pip install --require-hashes -r requirements.dev.lock
 env/bin/pip install --no-deps -e .
 env/bin/barrelvault setup
+```
+
+A deploy installs `requirements.lock` instead, which leaves out the development tools. The lock files pin every package to a version and its hashes. After editing a requirements file, regenerate its lock:
+
+```sh
+env/bin/pip-compile --generate-hashes --allow-unsafe --strip-extras \
+  --output-file requirements.lock requirements.txt
+env/bin/pip-compile --generate-hashes --allow-unsafe --strip-extras \
+  --output-file requirements.dev.lock requirements.dev.txt
 ```
 
 `barrelvault setup` and `python -m barrelvault.cli setup` run the same command.

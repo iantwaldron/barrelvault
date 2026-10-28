@@ -14,6 +14,6 @@
 - Raise the `ServiceError` subclass that names the kind of refusal, with a message the caller can show. Login, the key exchange, and the session check raise one identical `Refused`.
 - Regenerate revision `0001` until the first deploy. After that, every schema change gets a new revision, and a shipped revision is never edited.
 - Use a stdlib virtualenv named `env` at `backend/env`. It is gitignored.
-- Pin each direct Python dependency as `~=X.Y.Z` in the requirements files. The minor stays fixed, and patch releases stay allowed. Changing the minor means editing that line.
+- Pin each direct Python dependency as `~=X.Y.Z` in the requirements files. The minor stays fixed, and patch releases stay allowed. Changing the minor means editing that line. After editing a requirements file, regenerate its lock file as the README shows, and install from the lock.
 - Do not commit `.env` or `*.db`.
 - When testing a model, insert nulls for nullable text columns with raw SQL, then read them back through the service. An ORM insert applies the default and hides the null the test is there to catch.

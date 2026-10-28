@@ -33,7 +33,7 @@ def _tokens(session: Session) -> list[Token]:
 
 def test_login_and_exchange_store_the_actor_and_expiry(session):
     before = datetime.now(UTC)
-    human = create_account(session, "Ada", "ada@example.com", "password-1")
+    human = create_account(session, "Ada", "ada@example.com", "password-1", "America/Chicago")
     secret = login(session, "ada@example.com", "password-1", session_length=100)
     agent, issued = live_agent(session, secret)
     agent_secret = exchange_key(session, issued.key, session_length=100)
@@ -48,14 +48,14 @@ def test_login_and_exchange_store_the_actor_and_expiry(session):
 
 
 def test_login_matches_the_email_in_any_case(session):
-    create_account(session, "Ada", "ada@example.com", "password-1")
+    create_account(session, "Ada", "ada@example.com", "password-1", "America/Chicago")
     for typed in ("ADA@example.com", "Ada@Example.Com", " ada@example.com "):
         secret = login(session, typed, "password-1", session_length=SESSION_LENGTH)
         assert authenticate(session, secret).name == "Ada"
 
 
 def test_wrong_email_and_wrong_password_are_the_same_failure(session, monkeypatch):
-    create_account(session, "Ada", "ada@example.com", "password-1")
+    create_account(session, "Ada", "ada@example.com", "password-1", "America/Chicago")
     calls = {"n": 0}
     real = auth._passwords.verify
 
@@ -79,7 +79,7 @@ def test_wrong_email_and_wrong_password_are_the_same_failure(session, monkeypatc
 
 
 def test_an_unrecognized_password_hash_is_a_refused_login(session):
-    human = create_account(session, "Ada", "ada@example.com", "password-1")
+    human = create_account(session, "Ada", "ada@example.com", "password-1", "America/Chicago")
     session.connection().execute(
         text("UPDATE human SET password_hash = 'password-1' WHERE user_id = :user_id"),
         {"user_id": human.user_id},
@@ -108,7 +108,7 @@ def test_every_auth_refusal_is_the_same(session):
 
 
 def test_refused_mint_leaves_the_existing_session(session):
-    create_account(session, "Ada", "ada@example.com", "password-1")
+    create_account(session, "Ada", "ada@example.com", "password-1", "America/Chicago")
     secret = login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
     token_id = _tokens(session)[0].id
     agent, issued = live_agent(session, secret)
@@ -139,7 +139,7 @@ def test_refused_mint_leaves_the_existing_session(session):
 
 
 def test_a_mint_that_does_not_commit_leaves_the_previous_session(session):
-    create_account(session, "Ada", "ada@example.com", "password-1")
+    create_account(session, "Ada", "ada@example.com", "password-1", "America/Chicago")
     secret = login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
     session.commit()
     login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
@@ -156,7 +156,7 @@ def test_a_second_mint_replaces_the_row(session):
 
     event.listen(Token, "before_update", _updated)
     try:
-        create_account(session, "Ada", "ada@example.com", "password-1")
+        create_account(session, "Ada", "ada@example.com", "password-1", "America/Chicago")
         first = login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
         first_hash = _tokens(session)[0].secret_hash
         second = login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
@@ -172,7 +172,7 @@ def test_a_second_mint_replaces_the_row(session):
 
 
 def test_a_mint_without_an_expiry_is_refused(session, monkeypatch):
-    create_account(session, "Ada", "ada@example.com", "password-1")
+    create_account(session, "Ada", "ada@example.com", "password-1", "America/Chicago")
     secret = login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
     session.commit()
 
@@ -188,7 +188,7 @@ def test_a_mint_without_an_expiry_is_refused(session, monkeypatch):
 
 
 def test_session_field_changes_are_refused(session):
-    create_account(session, "Ada", "ada@example.com", "password-1")
+    create_account(session, "Ada", "ada@example.com", "password-1", "America/Chicago")
     secret = login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
     session.commit()
     original = _tokens(session)[0]
@@ -222,7 +222,7 @@ def test_session_field_changes_are_refused(session):
 
 
 def test_authenticate_refuses_unknown_and_expired_secrets(session):
-    create_account(session, "Ada", "ada@example.com", "password-1")
+    create_account(session, "Ada", "ada@example.com", "password-1", "America/Chicago")
     secret = login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
     with pytest.raises(ServiceError):
         authenticate(session, "missing")
@@ -240,7 +240,7 @@ def test_authenticate_refuses_unknown_and_expired_secrets(session):
 
 
 def test_authenticate_refuses_a_session_whose_user_is_gone(session):
-    human = create_account(session, "Ada", "ada@example.com", "password-1")
+    human = create_account(session, "Ada", "ada@example.com", "password-1", "America/Chicago")
     secret = login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
     session.commit()
     # Foreign keys only switch off outside a transaction, so use a bare connection.
@@ -322,7 +322,7 @@ def test_dead_agent_key_delete_commits_with_the_caller(session):
 
 
 def test_blank_secrets_are_refused(session):
-    create_account(session, "Ada", "ada@example.com", "password-1")
+    create_account(session, "Ada", "ada@example.com", "password-1", "America/Chicago")
     for secret in (" ", None):
         with pytest.raises(ServiceError):
             exchange_key(session, secret, session_length=SESSION_LENGTH)
@@ -333,14 +333,14 @@ def test_blank_secrets_are_refused(session):
 
 
 def test_a_new_session_without_expiry_is_refused(session):
-    human = create_account(session, "Ada", "ada@example.com", "password-1")
+    human = create_account(session, "Ada", "ada@example.com", "password-1", "America/Chicago")
     session.add(Token(user_id=human.user_id, secret_hash="hash"))
     with pytest.raises(IntegrityError):
         session.flush()
 
 
 def test_a_naive_expiry_is_still_compared_in_utc(session):
-    create_account(session, "Ada", "ada@example.com", "password-1")
+    create_account(session, "Ada", "ada@example.com", "password-1", "America/Chicago")
     secret = login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
     token = _tokens(session)[0]
     set_token_expiry(session, token.user_id, "2000-01-01 00:00:00")
@@ -349,15 +349,8 @@ def test_a_naive_expiry_is_still_compared_in_utc(session):
     assert len(_tokens(session)) == 1
 
 
-def test_a_naive_datetime_is_treated_as_utc():
-    naive = datetime(2000, 1, 1)
-    compared = auth._as_utc(naive)
-    assert compared.tzinfo is UTC
-    assert compared == datetime(2000, 1, 1, tzinfo=UTC)
-
-
 def test_logout_deletes_the_row(session):
-    create_account(session, "Ada", "ada@example.com", "password-1")
+    create_account(session, "Ada", "ada@example.com", "password-1", "America/Chicago")
     secret = login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
     logout(session, secret)
     assert _tokens(session) == []
@@ -370,7 +363,9 @@ def test_logout_deletes_the_row(session):
 def test_overlapping_mints_leave_one_session(database):
     SQLModel.metadata.create_all(db.get_engine())
     with db.open_session() as db_session:
-        human = create_account(db_session, "Ada", "ada@example.com", "password-1")
+        human = create_account(
+            db_session, "Ada", "ada@example.com", "password-1", "America/Chicago"
+        )
         user_id = human.user_id
     start = threading.Event()
     found: list[str] = []

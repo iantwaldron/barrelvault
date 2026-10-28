@@ -32,7 +32,7 @@ from tests.support import (
 
 
 def test_create_account_stores_one_human(session):
-    human = create_account(session, "Ada", "ada@example.com", "password-1")
+    human = create_account(session, "Ada", "ada@example.com", "password-1", "America/Chicago")
     assert human.email == "ada@example.com"
     assert human.password_hash != "password-1"
     assert human.password_hash.startswith("$argon2")
@@ -41,25 +41,25 @@ def test_create_account_stores_one_human(session):
     assert user is not None
     assert user.name == "Ada"
     with pytest.raises(ServiceError):
-        create_account(session, "Bea", "bea@example.com", "password-2")
+        create_account(session, "Bea", "bea@example.com", "password-2", "America/Chicago")
 
 
 def test_create_account_stores_the_normalized_email(session):
-    human = create_account(session, "Ada", "  Ada@Example.COM ", "password-1")
+    human = create_account(session, "Ada", "  Ada@Example.COM ", "password-1", "America/Chicago")
     assert human.email == "ada@example.com"
     for malformed in ("ada", "ada@", "@example.com", "ada@example", "a b@example.com"):
         with pytest.raises(Invalid) as raised:
-            create_account(session, "Bea", malformed, "password-2")
+            create_account(session, "Bea", malformed, "password-2", "UTC")
         assert raised.value.message == "email is not a valid address"
 
 
 def test_create_account_refuses_a_blank_field(session):
     with pytest.raises(ServiceError):
-        create_account(session, " ", "ada@example.com", "password-1")
+        create_account(session, " ", "ada@example.com", "password-1", "America/Chicago")
     with pytest.raises(ServiceError):
-        create_account(session, "Ada", " ", "password-1")
+        create_account(session, "Ada", " ", "password-1", "America/Chicago")
     with pytest.raises(ServiceError):
-        create_account(session, "Ada", "ada@example.com", " ")
+        create_account(session, "Ada", "ada@example.com", " ", "America/Chicago")
     assert session.exec(select(Human)).all() == []
 
 
@@ -80,7 +80,7 @@ def test_a_logged_in_session_cannot_create_a_human(session):
 
 
 def test_only_setup_adds_a_human(session):
-    create_account(session, "Ada", "ada@example.com", "password-1")
+    create_account(session, "Ada", "ada@example.com", "password-1", "America/Chicago")
     session.commit()
     plain = Session(session.get_bind())
     user = User(name="Bea")
@@ -289,7 +289,7 @@ def test_owner_must_be_the_human(session):
 
 
 def test_an_unauthenticated_session_needs_a_human_owner(session):
-    create_account(session, "Ada", "ada@example.com", "password-1")
+    create_account(session, "Ada", "ada@example.com", "password-1", "America/Chicago")
     user = User(name="Bot")
     session.add(user)
     session.flush()
@@ -341,8 +341,8 @@ def test_profile_changes_are_refused(session):
     with pytest.raises(IntegrityError):
         session.connection().execute(
             text(
-                "INSERT INTO human (user_id, email, password_hash) "
-                "VALUES (:user_id, 'bot@example.com', 'hash')"
+                "INSERT INTO human (user_id, email, password_hash, timezone) "
+                "VALUES (:user_id, 'bot@example.com', 'hash', 'UTC')"
             ),
             {"user_id": agent.user_id},
         )
@@ -354,7 +354,7 @@ def test_profile_changes_are_refused(session):
 
 
 def test_the_service_acts_as_a_user_without_a_session(session):
-    human = create_account(session, "Ada", "ada@example.com", "password-1")
+    human = create_account(session, "Ada", "ada@example.com", "password-1", "America/Chicago")
     ada = session.get(User, human.user_id)
     agent = add_agent(session, ada, "Bot")
     issued = issue_key(session, ada, agent.user_id, key_length=KEY_LENGTH)
@@ -509,7 +509,7 @@ def test_create_account_refuses_once_any_user_exists(session):
     session.add(User(name="Bot"))
     session.flush()
     with pytest.raises(ServiceError):
-        create_account(session, "Ada", "ada@example.com", "password-1")
+        create_account(session, "Ada", "ada@example.com", "password-1", "America/Chicago")
     assert session.exec(select(Human)).all() == []
 
 
@@ -552,9 +552,13 @@ def test_each_refusal_names_its_kind(session):
         (
             Conflict,
             "setup has already run",
-            lambda: create_account(session, "Eve", "e@example.com", "pw"),
+            lambda: create_account(session, "Eve", "e@example.com", "pw", "America/Chicago"),
         ),
-        (Invalid, "email is required", lambda: create_account(session, "Eve", " ", "pw")),
+        (
+            Invalid,
+            "email is required",
+            lambda: create_account(session, "Eve", " ", "pw", "America/Chicago"),
+        ),
     )
     for kind, message, call in cases:
         with pytest.raises(kind) as raised:

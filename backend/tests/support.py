@@ -19,7 +19,7 @@ def act_as(session: Session, secret: str) -> User:
 
 
 def make_account(session: Session) -> tuple[Human, str]:
-    human = create_account(session, "Ada", "ada@example.com", "password-1")
+    human = create_account(session, "Ada", "ada@example.com", "password-1", "America/Chicago")
     secret = login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
     return human, secret
 
@@ -32,8 +32,8 @@ def second_account(session: Session) -> tuple[int, str]:
     ).scalar_one()
     connection.execute(
         text(
-            "INSERT INTO human (user_id, email, password_hash) "
-            "VALUES (:user_id, 'bea@example.com', :password_hash)"
+            "INSERT INTO human (user_id, email, password_hash, timezone) "
+            "VALUES (:user_id, 'bea@example.com', :password_hash, 'UTC')"
         ),
         {"user_id": user_id, "password_hash": auth.hash_password("password-2")},
     )

@@ -14,6 +14,7 @@ from sqlmodel import Session, col, select
 
 from barrelvault.errors import Invalid, Refused
 from barrelvault.models import Agent, Human, Token, User
+from barrelvault.times import as_utc
 
 _passwords = PasswordHash.recommended()
 _DUMMY_PASSWORD_HASH = _passwords.hash("barrelvault-password-check")
@@ -65,7 +66,7 @@ def authenticate(session: Session, secret: str) -> User:
     if _blank(secret):
         raise Refused("refused")
     token = session.exec(select(Token).where(Token.secret_hash == _digest(secret))).one_or_none()
-    if token is None or _as_utc(token.expires_at) <= datetime.now(UTC):
+    if token is None or as_utc(token.expires_at) <= datetime.now(UTC):
         raise Refused("refused")
     user = session.get(User, token.user_id)
     if user is None:
@@ -137,7 +138,7 @@ def _agent_key_is_dead(agent: Agent) -> bool:
     """No key, which includes a retired agent, or a key past its expiry."""
     if agent.key_expires_at is None:
         return True
-    return _as_utc(agent.key_expires_at) <= datetime.now(UTC)
+    return as_utc(agent.key_expires_at) <= datetime.now(UTC)
 
 
 def _digest(value: str) -> str:
@@ -146,9 +147,3 @@ def _digest(value: str) -> str:
 
 def _blank(value: str | None) -> bool:
     return value is None or value.strip() == ""
-
-
-def _as_utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)

@@ -28,7 +28,10 @@ def _human(session: Session, name: str = "Ada", email: str = "ada@example.com") 
 
 def _insert_human(session: Session, user_id: int, email: str) -> None:
     session.connection().execute(
-        text("INSERT INTO human (user_id, email, password_hash) VALUES (:user_id, :email, 'hash')"),
+        text(
+            "INSERT INTO human (user_id, email, password_hash, timezone) "
+            "VALUES (:user_id, :email, 'hash', 'UTC')"
+        ),
         {"user_id": user_id, "email": email},
     )
 
@@ -120,8 +123,8 @@ def test_one_human_profile_per_user(session):
     with pytest.raises(IntegrityError):
         session.connection().execute(
             text(
-                "INSERT INTO human (user_id, email, password_hash) "
-                "VALUES (:user_id, 'other@example.com', 'hash')"
+                "INSERT INTO human (user_id, email, password_hash, timezone) "
+                "VALUES (:user_id, 'other@example.com', 'hash', 'UTC')"
             ),
             {"user_id": human.user_id},
         )
@@ -142,10 +145,17 @@ def test_required_columns_reject_null(session):
     created = datetime.now(UTC).isoformat()
     statements = [
         "INSERT INTO user (name) VALUES (NULL)",
-        "INSERT INTO human (user_id, email, password_hash) VALUES (:user_id, NULL, 'hash')",
         (
-            "INSERT INTO human (user_id, email, password_hash) "
-            "VALUES (:user_id, 'ada@example.com', NULL)"
+            "INSERT INTO human (user_id, email, password_hash, timezone) "
+            "VALUES (:user_id, NULL, 'hash', 'UTC')"
+        ),
+        (
+            "INSERT INTO human (user_id, email, password_hash, timezone) "
+            "VALUES (:user_id, 'ada@example.com', 'hash', NULL)"
+        ),
+        (
+            "INSERT INTO human (user_id, email, password_hash, timezone) "
+            "VALUES (:user_id, 'ada@example.com', NULL, 'UTC')"
         ),
         "INSERT INTO agent (user_id, owner_id) VALUES (:user_id, NULL)",
         (
@@ -172,8 +182,8 @@ def test_null_key_hash_is_read_back(session):
     connection.execute(text("INSERT INTO user (name) VALUES ('Bot')"))
     connection.execute(
         text(
-            "INSERT INTO human (user_id, email, password_hash) "
-            "VALUES (1, 'ada@example.com', 'hash')"
+            "INSERT INTO human (user_id, email, password_hash, timezone) "
+            "VALUES (1, 'ada@example.com', 'hash', 'UTC')"
         )
     )
     connection.execute(

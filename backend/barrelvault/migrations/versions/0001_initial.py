@@ -1,8 +1,8 @@
-"""Create the user, human, agent, and token tables
+"""Create the initial tables
 
 Revision ID: 0001
 Revises: 
-Create Date: 2026-10-27 19:55:47.195832
+Create Date: 2026-10-28 11:02:59.176759
 
 """
 from typing import Sequence, Union
@@ -93,6 +93,7 @@ def upgrade() -> None:
     sa.Column('user_id', sa.Integer(), nullable=False),
     sa.Column('email', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('password_hash', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
+    sa.Column('timezone', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.CheckConstraint('email = lower(email)', name='ck_human_email_lowercase'),
     sa.ForeignKeyConstraint(['user_id'], ['user.id'], ),
     sa.PrimaryKeyConstraint('user_id'),

@@ -25,13 +25,14 @@ def setup() -> None:
         _exit("Barrelvault is already set up.")
     name = input("Name: ")
     email = input("Email: ")
+    timezone = input("Timezone, such as America/Chicago: ")
     password = getpass.getpass("Password: ")
     confirmed = getpass.getpass("Password (again): ")
     if password != confirmed:
         _exit("Passwords do not match.")
     try:
         with open_session() as session:
-            create_account(session, name, email, password)
+            create_account(session, name, email, password, timezone)
     except ServiceError as error:
         _exit(f"Setup was refused: {error.message}.")
     print("Account created.")

@@ -26,6 +26,8 @@ class Human(SQLModel, table=True):
     user_id: int = Field(foreign_key="user.id", primary_key=True)
     email: str = Field(unique=True)
     password_hash: str
+    # An IANA name. An agent works in its owner's timezone.
+    timezone: str
 
     def get_agents(self, session: Session) -> list["Agent"]:
         """Return the agents this human owns, including retired agents."""

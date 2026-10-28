@@ -18,13 +18,14 @@ def test_setup_creates_the_account(database, monkeypatch, capsys):
     prompts = _prompt(monkeypatch, "Ada", "ada@example.com", "password-1", "password-1")
     main(["setup"])
     assert database.is_file()
-    assert prompts == ["Name: ", "Email: ", "Password: ", "Password (again): "]
+    assert prompts == ["Name: ", "Email: ", TIMEZONE_PROMPT, "Password: ", "Password (again): "]
     with open_session() as session:
         human = session.exec(select(Human)).one()
         user = session.get(User, human.user_id)
         assert user is not None
         assert user.name == "Ada"
         assert human.email == "ada@example.com"
+        assert human.timezone == "America/Chicago"
         assert human.password_hash != "password-1"
         assert human.password_hash.startswith("$argon2")
         assert auth._passwords.verify("password-1", human.password_hash)
@@ -89,7 +90,7 @@ def test_overlapping_setup_runs_create_one_human(database, monkeypatch, capsys):
     apply_migrations()
     monkeypatch.setattr("barrelvault.cli.apply_migrations", lambda: None)
     both_prompted = threading.Barrier(2)
-    answers = {"Name: ": "Ada", "Email: ": "ada@example.com"}
+    answers = {"Name: ": "Ada", "Email: ": "ada@example.com", TIMEZONE_PROMPT: "UTC"}
     monkeypatch.setattr("builtins.input", lambda prompt: answers[prompt])
 
     def read_password(prompt: str) -> str:
@@ -119,6 +120,16 @@ def test_overlapping_setup_runs_create_one_human(database, monkeypatch, capsys):
     assert "Setup was refused: setup has already run.\n" in capsys.readouterr().err
     with open_session() as session:
         assert len(session.exec(select(User)).all()) == 1
+
+
+def test_an_unknown_timezone_is_refused(database, monkeypatch, capsys):
+    _prompt(monkeypatch, "Ada", "ada@example.com", "password-1", "password-1", "Mars/Olympus")
+    with pytest.raises(SystemExit) as raised:
+        main(["setup"])
+    assert raised.value.code == 1
+    assert capsys.readouterr().err == "Setup was refused: timezone is not a known name.\n"
+    with open_session(immediate=False) as session:
+        assert session.exec(select(User)).first() is None
 
 
 def test_a_malformed_email_is_refused(database, monkeypatch, capsys):
@@ -164,9 +175,19 @@ def test_setup_is_the_command(database):
     assert not database.exists()
 
 
-def _prompt(monkeypatch, name: str, email: str, password: str, confirmed: str) -> list[str]:
+TIMEZONE_PROMPT = "Timezone, such as America/Chicago: "
+
+
+def _prompt(
+    monkeypatch,
+    name: str,
+    email: str,
+    password: str,
+    confirmed: str,
+    timezone: str = "America/Chicago",
+) -> list[str]:
     prompts: list[str] = []
-    answers = {"Name: ": name, "Email: ": email}
+    answers = {"Name: ": name, "Email: ": email, TIMEZONE_PROMPT: timezone}
 
     def read_input(prompt: str) -> str:
         prompts.append(prompt)

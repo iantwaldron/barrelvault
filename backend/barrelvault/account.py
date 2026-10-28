@@ -10,6 +10,7 @@ from barrelvault.auth import delete_session, hash_password, normalize_email
 from barrelvault.errors import Conflict, Forbidden, Invalid, NotFound
 from barrelvault.guards import KEY_WRITE, SETUP_WRITE
 from barrelvault.models import Agent, Human, User
+from barrelvault.times import check_timezone
 
 _REFERENCES = (
     ("task", ("created_by", "updated_by", "owned_by")),
@@ -28,18 +29,21 @@ def is_set_up(session: Session) -> bool:
     return session.exec(select(User)).first() is not None
 
 
-def create_account(session: Session, name: str, email: str, password: str) -> Human:
+def create_account(session: Session, name: str, email: str, password: str, timezone: str) -> Human:
     """Create the first human. Setup is the only caller."""
-    for field, value in (("name", name), ("email", email), ("password", password)):
+    fields = (("name", name), ("email", email), ("timezone", timezone), ("password", password))
+    for field, value in fields:
         if _blank(value):
             raise Invalid(f"{field} is required")
     address = normalize_email(email)
+    check_timezone(timezone)
     if is_set_up(session):
         raise Conflict("setup has already run")
     human = Human(
         user_id=_add_user(session, name),
         email=address,
         password_hash=hash_password(password),
+        timezone=timezone,
     )
     session.add(human)
     session.info[SETUP_WRITE] = True

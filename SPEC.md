@@ -110,7 +110,7 @@ Tests cover a login with the person's password, a wrong password, an exchange wi
 
 ### Task
 
-A task may contain tasks, with the same fields at every depth. An empty `parent_id` is a root, and a root need not have children. The default read is one level: roots, or the direct children of a parent. `tree` returns every task under that parent. In v0.1 every list, `tree` included, is ordered by `created_at`, then `id`. A later priority or grouping order replaces it.
+A task may contain tasks, with the same fields at every depth. An empty `parent_id` is a root, and a root need not have children. The default read is one level: roots, or the direct children of a parent. `tree` returns every task under that parent. In v0.1 a one-level list is ordered by `created_at`, then `id`. `tree` lists each task before the tasks under it, depth first, with siblings in that same order, so a caller can render the outline as the rows arrive. A later priority or grouping order replaces the sibling order.
 
 In v0.1 a read loads the account's tasks with one query, selecting the columns the tree needs and not `notes`, and a pure function builds the tree from those rows by grouping them on `parent_id`. The same function serves the one-level read, `tree`, the cycle check, and the dropped state below. A write that depends on the tree, such as the cycle check, loads it inside its own transaction. A later version may load a subtree with a recursive query instead, behind that same function.
 

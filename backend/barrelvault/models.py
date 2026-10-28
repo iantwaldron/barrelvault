@@ -1,4 +1,4 @@
-"""User, Human, Agent, and Token tables.
+"""User, Human, Agent, Token, Task, Block, and TaskHistory tables.
 
 A rule that holds for every write, whoever makes it, is a constraint or a
 trigger here, so a bulk statement or raw SQL cannot skip it. A rule that
@@ -9,8 +9,12 @@ import hashlib
 import secrets
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import DDL, CheckConstraint, event
+from sqlalchemy import DDL, CheckConstraint, Index, SmallInteger, String, event
 from sqlmodel import Field, Session, SQLModel, select
+
+from barrelvault.history import HistoryBase, history
+from barrelvault.status import CLOSED
+from barrelvault.times import as_utc
 
 
 class User(SQLModel, table=True):
@@ -81,6 +85,67 @@ class Token(SQLModel, table=True):
         return token, raw
 
 
+class TaskHistory(HistoryBase, table=True):
+    __tablename__ = "task_history"
+    __table_args__ = (Index("ix_task_history_task_id_created_at", "task_id", "created_at"),)
+
+    task_id: int = Field(foreign_key="task.id", ondelete="CASCADE")
+
+
+@history(TaskHistory)
+class Task(SQLModel, table=True):
+    __table_args__ = (
+        CheckConstraint("status IN (0, 1, 2, 3)", name="ck_task_status"),
+        CheckConstraint(
+            "estimate_minutes IS NULL OR estimate_minutes BETWEEN 0 AND 32767",
+            name="ck_task_estimate_minutes",
+        ),
+        CheckConstraint("trim(title) != ''", name="ck_task_title"),
+        # The duplicate check looks up a title in the account. title compares without case.
+        Index("ix_task_owned_by_title", "owned_by", "title"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    parent_id: int | None = Field(
+        default=None, foreign_key="task.id", ondelete="CASCADE", index=True
+    )
+    title: str = Field(sa_type=String(collation="NOCASE"))
+    notes: str | None = Field(default=None)
+    tags: str | None = Field(default=None)
+    status: int = Field(default=0, sa_type=SmallInteger, sa_column_kwargs={"server_default": "0"})
+    estimate_minutes: int | None = Field(default=None, sa_type=SmallInteger)
+    due_at: datetime | None = Field(default=None)
+    created_by: int = Field(foreign_key="user.id")
+    created_at: datetime
+    updated_at: datetime
+    updated_by: int = Field(foreign_key="user.id")
+    owned_by: int = Field(foreign_key="user.id", index=True)
+
+    def open_for(self, now: datetime | None = None) -> timedelta:
+        """How long the task has been open. A closed task stops at its last update."""
+        end = as_utc(self.updated_at) if self.status in CLOSED else now or datetime.now(UTC)
+        return end - as_utc(self.created_at)
+
+
+class Block(SQLModel, table=True):
+    __table_args__ = (
+        CheckConstraint(
+            "trim(reason) != '' AND instr(reason, char(10)) = 0", name="ck_block_reason"
+        ),
+        CheckConstraint(
+            "(released_at IS NULL) = (released_by IS NULL)", name="ck_block_release_pair"
+        ),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    task_id: int = Field(foreign_key="task.id", ondelete="CASCADE", index=True)
+    reason: str
+    created_by: int = Field(foreign_key="user.id")
+    created_at: datetime
+    released_by: int | None = Field(default=None, foreign_key="user.id")
+    released_at: datetime | None = Field(default=None)
+
+
 # Revision 0001 creates these with the same text. A change here needs a migration.
 TRIGGERS = (
     """CREATE TRIGGER agent_owner_is_fixed BEFORE UPDATE OF owner_id ON agent
@@ -123,6 +188,45 @@ WHEN NEW.user_id IS NOT OLD.user_id
   OR NEW.secret_hash IS NOT OLD.secret_hash
   OR NEW.expires_at IS NOT OLD.expires_at
 BEGIN SELECT RAISE(ABORT, 'a session row is fixed'); END""",
+    """CREATE TRIGGER task_owner_is_human BEFORE INSERT ON task
+WHEN NOT EXISTS (SELECT 1 FROM human WHERE user_id = NEW.owned_by)
+BEGIN SELECT RAISE(ABORT, 'a task is owned by a human'); END""",
+    # created_by moves only when a reassign hands an agent's work to its owner.
+    """CREATE TRIGGER task_is_fixed BEFORE UPDATE OF owned_by, created_by, created_at ON task
+WHEN NEW.owned_by IS NOT OLD.owned_by
+  OR NEW.created_at IS NOT OLD.created_at
+  OR (NEW.created_by IS NOT OLD.created_by AND NOT (
+    NEW.created_by = NEW.owned_by
+    AND EXISTS (SELECT 1 FROM agent WHERE user_id = OLD.created_by AND owner_id = NEW.owned_by)
+  ))
+BEGIN SELECT RAISE(ABORT, 'a task keeps its owner and creation'); END""",
+    """CREATE TRIGGER task_parent_in_account BEFORE INSERT ON task
+WHEN NEW.parent_id IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM task WHERE id = NEW.parent_id AND owned_by = NEW.owned_by)
+BEGIN SELECT RAISE(ABORT, 'a parent is in the same account'); END""",
+    """CREATE TRIGGER task_parent_in_account_on_move BEFORE UPDATE OF parent_id ON task
+WHEN NEW.parent_id IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM task WHERE id = NEW.parent_id AND owned_by = NEW.owned_by)
+BEGIN SELECT RAISE(ABORT, 'a parent is in the same account'); END""",
+    """CREATE TRIGGER task_status_is_held_by_a_block BEFORE UPDATE OF status ON task
+WHEN NEW.status IS NOT OLD.status
+  AND EXISTS (SELECT 1 FROM block WHERE task_id = NEW.id AND released_at IS NULL)
+BEGIN SELECT RAISE(ABORT, 'a blocked task keeps its status'); END""",
+    """CREATE TRIGGER block_on_an_open_task BEFORE INSERT ON block
+WHEN (SELECT status FROM task WHERE id = NEW.task_id) NOT IN (0, 1)
+BEGIN SELECT RAISE(ABORT, 'a block is added only to an open task'); END""",
+    """CREATE TRIGGER block_release_is_final BEFORE UPDATE OF released_at ON block
+WHEN OLD.released_at IS NOT NULL
+BEGIN SELECT RAISE(ABORT, 'a released block stays released'); END""",
+    """CREATE TRIGGER block_is_fixed BEFORE UPDATE OF task_id, created_at ON block
+WHEN NEW.task_id IS NOT OLD.task_id OR NEW.created_at IS NOT OLD.created_at
+BEGIN SELECT RAISE(ABORT, 'a block stays on its task'); END""",
+    """CREATE TRIGGER task_history_is_fixed BEFORE UPDATE OF task_id, created_at, state
+ON task_history
+WHEN NEW.task_id IS NOT OLD.task_id
+  OR NEW.created_at IS NOT OLD.created_at
+  OR NEW.state IS NOT OLD.state
+BEGIN SELECT RAISE(ABORT, 'a history row is fixed'); END""",
 )
 
 for _trigger in TRIGGERS:

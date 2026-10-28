@@ -1,3 +1,4 @@
+import re
 import sqlite3
 import subprocess
 import sys
@@ -9,7 +10,7 @@ import pytest
 from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
-from sqlalchemy import text
+from sqlalchemy import CheckConstraint, text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import SQLModel, select
 
@@ -22,7 +23,7 @@ from barrelvault.db import (
     migration_config,
     open_session,
 )
-from barrelvault.models import Token, User
+from barrelvault.models import TRIGGERS, Token, User
 from tests.support import reset_engine
 
 
@@ -179,19 +180,20 @@ def test_migrations_build_the_model_triggers_and_checks(database, engine):
                 name
                 for kind, _table, sql in rows
                 if kind == "table"
-                for name in (
-                    "ck_agent_key_pair",
-                    "ck_agent_retired_without_key",
-                    "ck_human_email_lowercase",
-                )
-                if name in sql
+                for name in re.findall(r"CONSTRAINT (ck_\w+)", sql)
             },
         }
 
     with get_engine().connect() as migrated, engine.connect() as modeled:
         assert schema(migrated) == schema(modeled)
-        assert len(schema(migrated)["triggers"]) == 7
-        assert len(schema(migrated)["checks"]) == 3
+        assert len(schema(migrated)["triggers"]) == len(TRIGGERS)
+        named_checks = {
+            constraint.name
+            for table in SQLModel.metadata.tables.values()
+            for constraint in table.constraints
+            if isinstance(constraint, CheckConstraint) and constraint.name
+        }
+        assert schema(migrated)["checks"] == named_checks
 
 
 def test_migrations_downgrade_to_an_empty_database(database):

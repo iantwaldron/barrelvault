@@ -19,7 +19,7 @@ from barrelvault.account import (
 from barrelvault.auth import authenticate, exchange_key
 from barrelvault.errors import Conflict, Forbidden, Invalid, NotFound, ServiceError
 from barrelvault.guards import SETUP_WRITE
-from barrelvault.models import Agent, Human, Token, User
+from barrelvault.models import Agent, Block, Human, Task, Token, User
 from tests.support import (
     KEY_LENGTH,
     SESSION_LENGTH,
@@ -582,29 +582,26 @@ def test_reassign_with_nothing_attached_removes_the_agent(session):
 
 
 def _attach(session: Session, agent_user_id: int, human_user_id: int) -> None:
-    connection = session.connection()
-    connection.execute(
-        text(
-            "CREATE TABLE task ("
-            "id INTEGER PRIMARY KEY, created_by INTEGER, updated_by INTEGER, owned_by INTEGER)"
+    """A task, a released block, and a history row, all made by the agent."""
+    now = datetime.now(UTC)
+    task = Task(
+        title="Call Chad",
+        created_by=agent_user_id,
+        created_at=now,
+        updated_by=agent_user_id,
+        updated_at=now,
+        owned_by=human_user_id,
+    )
+    session.add(task)
+    session.flush()
+    session.add(
+        Block(
+            task_id=task.id,
+            reason="Waiting on Chad",
+            created_by=agent_user_id,
+            created_at=now,
+            released_by=agent_user_id,
+            released_at=now,
         )
     )
-    connection.execute(
-        text("CREATE TABLE block (id INTEGER PRIMARY KEY, created_by INTEGER, released_by INTEGER)")
-    )
-    connection.execute(text("CREATE TABLE task_history (id INTEGER PRIMARY KEY, user_id INTEGER)"))
-    connection.execute(
-        text(
-            "INSERT INTO task (created_by, updated_by, owned_by) "
-            "VALUES (:agent_user_id, :agent_user_id, :human_user_id)"
-        ),
-        {"agent_user_id": agent_user_id, "human_user_id": human_user_id},
-    )
-    connection.execute(
-        text("INSERT INTO block (created_by, released_by) VALUES (:agent_user_id, :agent_user_id)"),
-        {"agent_user_id": agent_user_id},
-    )
-    connection.execute(
-        text("INSERT INTO task_history (user_id) VALUES (:agent_user_id)"),
-        {"agent_user_id": agent_user_id},
-    )
+    session.flush()

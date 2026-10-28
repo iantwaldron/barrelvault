@@ -3,19 +3,21 @@
 from datetime import UTC, datetime
 from typing import NamedTuple
 
-from sqlalchemy import or_, text
+from sqlalchemy import or_, update
 from sqlmodel import Session, col, select
 
 from barrelvault.auth import delete_session, hash_password, normalize_email
 from barrelvault.errors import Conflict, Forbidden, Invalid, NotFound
 from barrelvault.guards import KEY_WRITE, SETUP_WRITE
-from barrelvault.models import Agent, Human, User
+from barrelvault.models import Agent, Block, Human, Task, TaskHistory, User
 from barrelvault.times import check_timezone
 
-_REFERENCES = (
-    ("task", ("created_by", "updated_by", "owned_by")),
-    ("block", ("created_by", "released_by")),
-    ("task_history", ("user_id",)),
+# Every column that names who did something. Reassign moves each one to the person.
+# owned_by is left out: it is always the person already.
+_ACTOR_COLUMNS = (
+    (Task, ("created_by", "updated_by")),
+    (Block, ("created_by", "released_by")),
+    (TaskHistory, ("user_id",)),
 )
 
 
@@ -183,43 +185,22 @@ def _remove_agent(session: Session, agent: Agent) -> None:
 
 
 def _attached(session: Session, user_id: int) -> bool:
-    names = _table_names(session)
-    for table, columns in _REFERENCES:
-        if table not in names:
-            continue
-        for column in columns:
-            row = (
-                session.connection()
-                .execute(
-                    text(f"SELECT 1 FROM {table} WHERE {column} = :user_id LIMIT 1"),
-                    {"user_id": user_id},
-                )
-                .first()
-            )
-            if row is not None:
-                return True
+    """True when a task, block, or history row names the user."""
+    for model, columns in _ACTOR_COLUMNS:
+        named = or_(*(getattr(model, column) == user_id for column in columns))
+        if session.exec(select(model).where(named).limit(1)).first() is not None:
+            return True
     return False
 
 
 def _move_references(session: Session, agent_user_id: int, human_user_id: int) -> None:
-    names = _table_names(session)
-    for table, columns in _REFERENCES:
-        if table not in names:
-            continue
+    for model, columns in _ACTOR_COLUMNS:
         for column in columns:
-            if column == "owned_by":
-                continue
-            session.connection().execute(
-                text(
-                    f"UPDATE {table} SET {column} = :human_user_id WHERE {column} = :agent_user_id"
-                ),
-                {"human_user_id": human_user_id, "agent_user_id": agent_user_id},
+            session.execute(
+                update(model)
+                .where(getattr(model, column) == agent_user_id)
+                .values({column: human_user_id})
             )
-
-
-def _table_names(session: Session) -> set[str]:
-    rows = session.connection().execute(text("SELECT name FROM sqlite_master WHERE type = 'table'"))
-    return {str(row[0]) for row in rows}
 
 
 def _name_taken(session: Session, human: Human, name: str) -> bool:

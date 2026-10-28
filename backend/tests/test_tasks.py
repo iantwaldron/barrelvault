@@ -451,3 +451,16 @@ def test_a_duplicate_title_matches_without_case_in_any_script(session, ada):
     create_task(session, ada, "Straße")
     with pytest.raises(Duplicate):
         create_task(session, ada, "STRASSE")
+
+
+def test_a_drop_after_an_unclosed_fence_keeps_its_reason(session, ada):
+    task = create_task(session, ada, "Call Chad", notes="Script:\n```\nnever closed")
+    assert drop_task(session, ada, task.id, "superseded").dropped_reason == "superseded"
+
+
+def test_a_blank_append_changes_nothing(session, ada):
+    task = create_task(session, ada, "Call Chad", notes="hello")
+    for blank in ("", "   ", "\n"):
+        same = update_task(session, ada, task.id, append_notes=blank)
+        assert same.notes == "hello" and same.updated_at == task.updated_at
+    assert len(task_history(session, ada, task.id)) == 1

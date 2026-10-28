@@ -6,7 +6,10 @@ operations only. Their output is text, never evaluated or passed to a template.
 
 import re
 
-_FENCE = re.compile(r"^(`{3,})(.*)$")
+# A code fence opens with three or more backticks, indented by up to three spaces,
+# and closes with at least as many backticks and nothing after them but spaces.
+_OPEN = re.compile(r"^ {0,3}(`{3,})([^`]*)$")
+_CLOSE = re.compile(r"^ {0,3}(`{3,})[ \t]*$")
 _LABEL = "dropped"
 
 
@@ -29,26 +32,46 @@ def dropped_block(reason: str) -> str:
     return f"{fence}{_LABEL}\n{text}\n{fence}"
 
 
-def dropped_reason(notes: str | None) -> str:
-    """The text of the last dropped block in the notes, or "" when there is none.
+def close_open_fence(notes: str | None) -> str:
+    """Notes with a closing fence added when they end inside an open one.
 
-    The notes are read line by line. A fence opens a block and the next line of at
-    least as many backticks, and nothing else, closes it. Only a block whose fence
-    is labeled dropped counts, and a fence inside another block is its text.
+    A drop calls this before it appends its block, so the block is not read as part
+    of an earlier block that was never closed.
+    """
+    text = notes or ""
+    _reason, fence = _scan(text)
+    if fence is None:
+        return text
+    return f"{text}\n{fence}"
+
+
+def dropped_reason(notes: str | None) -> str:
+    """The text of the last dropped block in the notes, or "" when there is none."""
+    reason, _fence = _scan(notes or "")
+    return reason
+
+
+def _scan(notes: str) -> tuple[str, str | None]:
+    """Read the notes line by line. Return the last dropped reason and any open fence.
+
+    Only a block whose fence is labeled dropped counts, and a fence inside another
+    block is that block's text.
     """
     reason = ""
     fence: str | None = None
     label = ""
     body: list[str] = []
-    for line in (notes or "").split("\n"):
+    for line in notes.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
         if fence is None:
-            opening = _FENCE.match(line)
+            opening = _OPEN.match(line)
             if opening:
                 fence, label, body = opening[1], opening[2].strip(), []
-        elif line.startswith(fence) and line.strip("`") == "":
+            continue
+        closing = _CLOSE.match(line)
+        if closing and len(closing[1]) >= len(fence):
             if label == _LABEL:
                 reason = "\n".join(body)
             fence = None
         else:
             body.append(line)
-    return reason
+    return reason, fence

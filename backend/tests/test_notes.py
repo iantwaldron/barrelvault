@@ -1,4 +1,4 @@
-from barrelvault.notes import append_note, dropped_block, dropped_reason
+from barrelvault.notes import append_note, close_open_fence, dropped_block, dropped_reason
 
 
 def test_an_append_adds_a_blank_line_after_existing_notes():
@@ -35,3 +35,26 @@ def test_a_dropped_fence_inside_another_block_is_its_text():
 
 def test_a_reason_is_trimmed_and_may_span_lines():
     assert dropped_reason(dropped_block("  line one\nline two  ")) == "line one\nline two"
+
+
+def test_windows_and_old_mac_line_endings_are_read():
+    for newline in ("\r\n", "\r"):
+        notes = newline.join(["```py", "x", "```", "```dropped", "Deal fell through.", "```"])
+        assert dropped_reason(notes) == "Deal fell through."
+
+
+def test_a_fence_closes_with_indent_trailing_spaces_or_a_longer_run():
+    assert dropped_reason("```dropped\nr\n```  ") == "r"
+    assert dropped_reason("   ```dropped\nr\n   ```") == "r"
+    assert dropped_reason("```dropped\nr\n`````") == "r"
+    assert dropped_reason("````dropped\nr\n```\nstill r\n````") == "r\n```\nstill r"
+    assert dropped_reason("    ```dropped\nindented four is code, not a fence\n```") == ""
+
+
+def test_an_unclosed_fence_is_closed_before_a_drop_appends():
+    notes = "x\n```\nnever closed"
+    closed = close_open_fence(notes)
+    assert closed == "x\n```\nnever closed\n```"
+    assert dropped_reason(append_note(closed, dropped_block("superseded"))) == "superseded"
+    assert close_open_fence("plain") == "plain"
+    assert close_open_fence(None) == ""

@@ -16,7 +16,7 @@ from sqlmodel import Session, col, select
 from barrelvault.account import account_of, actor_id
 from barrelvault.errors import Conflict, Duplicate, Invalid, NotFound
 from barrelvault.models import Block, Task, TaskHistory, User, title_key
-from barrelvault.notes import append_note, dropped_block, dropped_reason
+from barrelvault.notes import append_note, close_open_fence, dropped_block, dropped_reason
 from barrelvault.status import CLOSED, DROPPED, OPEN, STATUSES, TODO
 from barrelvault.tags import add_tags, has_tags, read_tags, remove_tags, stored_tags
 from barrelvault.times import as_utc, to_utc
@@ -190,7 +190,7 @@ def update_task(
         changes["title"] = normalize_title(title)
     if notes is not UNSET:
         changes["notes"] = notes
-    if append_notes is not None:
+    if append_notes is not None and append_notes.strip():
         changes["notes"] = append_note(task.notes, append_notes)
     if tags is not UNSET:
         changes["tags"] = stored_tags(tags)
@@ -223,7 +223,7 @@ def drop_task(
     _check_current(task, expected_updated_at)
     changes: dict[str, Any] = {"status": DROPPED}
     if reason is not None and reason.strip():
-        changes["notes"] = append_note(task.notes, dropped_block(reason))
+        changes["notes"] = append_note(close_open_fence(task.notes), dropped_block(reason))
     return _apply(session, actor, task, changes, release_blocks=release_blocks)
 
 

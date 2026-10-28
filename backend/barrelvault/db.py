@@ -77,7 +77,8 @@ def open_session(*, immediate: bool = True) -> Iterator[Session]:
     timeout instead of failing, and a check it reads cannot change before its
     write commits. A read-only session passes immediate=False.
     """
-    session = Session(get_engine())
+    # Objects stay readable after the commit, so a caller can return what it wrote.
+    session = Session(get_engine(), expire_on_commit=False)
     if immediate:
         session.connection(execution_options={"immediate": True})
     try:

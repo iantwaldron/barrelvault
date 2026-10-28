@@ -65,6 +65,15 @@ def test_open_session_commits(database):
         assert session.exec(select(User)).one().name == "Ada"
 
 
+def test_objects_stay_readable_after_the_session_commits(database):
+    SQLModel.metadata.create_all(get_engine())
+    with open_session() as session:
+        user = User(name="Ada")
+        session.add(user)
+    assert user.id is not None
+    assert user.name == "Ada"
+
+
 def test_open_session_rolls_back(database):
     SQLModel.metadata.create_all(get_engine())
     with pytest.raises(RuntimeError):

@@ -38,6 +38,11 @@ def session():
         yield db_session
 
 
+def _actor(session: Session, secret: str) -> User:
+    """Authenticate the way the API does, then act as that user."""
+    return authenticate(session, secret)
+
+
 def _account(session: Session) -> tuple[Human, str]:
     human = create_account(session, "Ada", "ada@example.com", "password-1")
     secret = login(session, "ada@example.com", "password-1")
@@ -45,8 +50,8 @@ def _account(session: Session) -> tuple[Human, str]:
 
 
 def _live_agent(session: Session, secret: str, name: str = "Bot") -> tuple[Agent, IssuedKey]:
-    agent = add_agent(session, secret, name)
-    issued = issue_key(session, secret, agent.user_id)
+    agent = add_agent(session, _actor(session, secret), name)
+    issued = issue_key(session, _actor(session, secret), agent.user_id)
     return agent, issued
 
 
@@ -136,7 +141,7 @@ def test_refused_mint_leaves_the_existing_session(session):
     _update_agent(session, agent.user_id, key_hash=None, key_expires_at=None)
     with pytest.raises(ServiceError):
         exchange_key(session, issued.key)
-    retire_agent(session, secret, agent.user_id)
+    retire_agent(session, _actor(session, secret), agent.user_id)
     with pytest.raises(ServiceError):
         exchange_key(session, issued.key)
     human_token = session.exec(select(Token).where(Token.user_id != agent.user_id)).one()

@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session as OrmSession, SessionTransaction
 from sqlmodel import Session, select
 
 from barrelvault.errors import ServiceError
-from barrelvault.guards import ACTOR
 from barrelvault.models import Agent, Human, Token, User
 
 _passwords = PasswordHash.recommended()
@@ -47,8 +46,7 @@ def exchange_key(session: Session, key: str) -> str:
 
 
 def authenticate(session: Session, secret: str) -> User:
-    """Accept a session secret. This is the only check later calls use."""
-    session.info.pop(ACTOR, None)
+    """Accept a session secret and return its user. The API and MCP use only this check."""
     if _blank(secret):
         raise ServiceError("refused")
     token = session.exec(select(Token).where(Token.secret_hash == _digest(secret))).one_or_none()
@@ -64,7 +62,6 @@ def authenticate(session: Session, secret: str) -> User:
         session.info.setdefault(_DEAD_SESSIONS, set()).add(token.id)
         session.delete(token)
         raise ServiceError("refused")
-    session.info[ACTOR] = (user.id, "agent" if agent is not None else "human")
     return user
 
 

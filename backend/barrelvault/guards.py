@@ -4,23 +4,17 @@ from sqlalchemy import event, inspect, select
 from sqlalchemy.orm import Session
 
 from barrelvault.errors import ServiceError
-from barrelvault.models import Agent, Human, Token, User
+from barrelvault.models import Agent, Human, Token
 
 # Set in session.info by the service while it issues, rolls, or retires a key.
 KEY_WRITE = "agent_key_write"
-# Set in session.info by authenticate: the acting user's id and "human" or "agent".
-ACTOR = "actor"
 # Set in session.info by setup while it writes the first human. No other write adds one.
 SETUP_WRITE = "setup_write"
-
-_ACCOUNT_ROWS = (User, Human, Agent)
 
 
 @event.listens_for(Session, "before_flush")
 def _check_flush(session: Session, _flush_context: object, _instances: object) -> None:
-    actor = session.info.get(ACTOR)
     for obj in session.new:
-        _check_actor(actor, obj)
         if isinstance(obj, Token):
             _check_new_token(obj)
         elif isinstance(obj, Human):
@@ -29,24 +23,15 @@ def _check_flush(session: Session, _flush_context: object, _instances: object) -
                 raise ServiceError("refused")
         elif isinstance(obj, Agent):
             _check_new_profile(session, obj)
-            _check_owner(session, obj, actor)
+            _check_owner(session, obj)
             _check_key_pair(obj)
     for obj in session.dirty:
         if not session.is_modified(obj):
             continue
-        _check_actor(actor, obj)
         if isinstance(obj, Token):
             _check_token_update(obj)
         elif isinstance(obj, Agent):
             _check_agent_update(obj, session.info.get(KEY_WRITE))
-    for obj in session.deleted:
-        _check_actor(actor, obj)
-
-
-def _check_actor(actor: tuple[int, str] | None, obj: object) -> None:
-    """An agent session cannot write a User, a Human, or an Agent."""
-    if actor is not None and actor[1] == "agent" and isinstance(obj, _ACCOUNT_ROWS):
-        raise ServiceError("refused")
 
 
 def _check_new_profile(session: Session, agent: Agent) -> None:
@@ -55,9 +40,8 @@ def _check_new_profile(session: Session, agent: Agent) -> None:
         raise ServiceError("refused")
 
 
-def _check_owner(session: Session, agent: Agent, actor: tuple[int, str] | None) -> None:
-    if actor is not None and agent.owner_id != actor[0]:
-        raise ServiceError("refused")
+def _check_owner(session: Session, agent: Agent) -> None:
+    """An agent's owner is a human."""
     if not _stored(session, Human, agent.owner_id):
         raise ServiceError("refused")
 

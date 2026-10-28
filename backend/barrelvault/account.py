@@ -1,4 +1,4 @@
-"""Account and agent writes."""
+"""Account and agent writes. Each call takes the acting user; none reads a session."""
 
 from datetime import UTC, datetime
 from typing import NamedTuple
@@ -6,7 +6,7 @@ from typing import NamedTuple
 from sqlalchemy import text
 from sqlmodel import Session, select
 
-from barrelvault.auth import ServiceError, authenticate, delete_session, hash_password
+from barrelvault.auth import ServiceError, delete_session, hash_password
 from barrelvault.guards import KEY_WRITE, SETUP_WRITE
 from barrelvault.models import Agent, Human, User
 
@@ -50,8 +50,8 @@ def create_account(session: Session, name: str, email: str, password: str) -> Hu
     return human
 
 
-def add_agent(session: Session, secret: str, name: str) -> Agent:
-    human = _human_actor(session, secret)
+def add_agent(session: Session, actor: User, name: str) -> Agent:
+    human = _acting_human(session, actor)
     if _blank(name) or _name_taken(session, name):
         raise ServiceError("refused")
     user = User(name=name)
@@ -63,8 +63,8 @@ def add_agent(session: Session, secret: str, name: str) -> Agent:
     return agent
 
 
-def issue_key(session: Session, secret: str, agent_user_id: int) -> IssuedKey:
-    human = _human_actor(session, secret)
+def issue_key(session: Session, actor: User, agent_user_id: int) -> IssuedKey:
+    human = _acting_human(session, actor)
     agent = _agent(session, human, agent_user_id)
     if agent.retired_at is not None or agent.key_hash is not None:
         raise ServiceError("refused")
@@ -75,8 +75,8 @@ def issue_key(session: Session, secret: str, agent_user_id: int) -> IssuedKey:
     return IssuedKey(raw, agent.key_expires_at)
 
 
-def roll_key(session: Session, secret: str, agent_user_id: int) -> IssuedKey:
-    human = _human_actor(session, secret)
+def roll_key(session: Session, actor: User, agent_user_id: int) -> IssuedKey:
+    human = _acting_human(session, actor)
     agent = _agent(session, human, agent_user_id)
     if agent.retired_at is not None or agent.key_hash is None or agent.key_expires_at is None:
         raise ServiceError("refused")
@@ -88,8 +88,8 @@ def roll_key(session: Session, secret: str, agent_user_id: int) -> IssuedKey:
     return IssuedKey(raw, agent.key_expires_at)
 
 
-def retire_agent(session: Session, secret: str, agent_user_id: int) -> None:
-    human = _human_actor(session, secret)
+def retire_agent(session: Session, actor: User, agent_user_id: int) -> None:
+    human = _acting_human(session, actor)
     agent = _agent(session, human, agent_user_id)
     with _key_write(session, "retire"):
         if agent.retired_at is None:
@@ -101,16 +101,16 @@ def retire_agent(session: Session, secret: str, agent_user_id: int) -> None:
         session.flush()
 
 
-def delete_agent(session: Session, secret: str, agent_user_id: int) -> None:
-    human = _human_actor(session, secret)
+def delete_agent(session: Session, actor: User, agent_user_id: int) -> None:
+    human = _acting_human(session, actor)
     agent = _agent(session, human, agent_user_id)
     if _attached(session, agent.user_id):
         return
     _remove_agent(session, agent)
 
 
-def reassign_agent(session: Session, secret: str, agent_user_id: int) -> None:
-    human = _human_actor(session, secret)
+def reassign_agent(session: Session, actor: User, agent_user_id: int) -> None:
+    human = _acting_human(session, actor)
     agent = _agent(session, human, agent_user_id)
     _move_references(session, agent.user_id, human.user_id)
     _remove_agent(session, agent)
@@ -128,9 +128,9 @@ class _key_write:
         self.session.info.pop(KEY_WRITE, None)
 
 
-def _human_actor(session: Session, secret: str) -> Human:
-    user = authenticate(session, secret)
-    human = session.get(Human, user.id)
+def _acting_human(session: Session, actor: User) -> Human:
+    """Only a person creates or changes an agent. An acting agent is refused."""
+    human = session.get(Human, actor.id)
     if human is None:
         raise ServiceError("refused")
     return human

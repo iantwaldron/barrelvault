@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import DDL, CheckConstraint, Index, SmallInteger, event
 from sqlmodel import Field, Session, SQLModel, select
 
-from barrelvault.history import HISTORY_INFO, HistoryBase, history
+from barrelvault.history import HistoryBase, history
 from barrelvault.status import CLOSED
 from barrelvault.times import as_utc
 
@@ -106,8 +106,6 @@ class Task(SQLModel, table=True):
         CheckConstraint(
             "trim(title, ' ' || char(9) || char(10) || char(13)) != ''", name="ck_task_title"
         ),
-        # The duplicate check looks up title_key in the account.
-        Index("ix_task_owned_by_title_key", "owned_by", "title_key"),
     )
 
     id: int | None = Field(default=None, primary_key=True)
@@ -115,9 +113,6 @@ class Task(SQLModel, table=True):
         default=None, foreign_key="task.id", ondelete="CASCADE", index=True
     )
     title: str
-    # The title folded for comparison without regard to case, in any script. A task
-    # write sets it from title before the flush, so a caller never sends it.
-    title_key: str = Field(default="", sa_column_kwargs={"info": {HISTORY_INFO: False}})
     notes: str | None = Field(default=None)
     tags: str | None = Field(default=None)
     status: int = Field(default=0, sa_type=SmallInteger, sa_column_kwargs={"server_default": "0"})
@@ -255,17 +250,6 @@ WHEN NEW.task_id IS NOT OLD.task_id
   OR NEW.state IS NOT OLD.state
 BEGIN SELECT RAISE(ABORT, 'a history row is fixed'); END""",
 )
-
-
-def title_key(title: str) -> str:
-    """The form two titles are compared in: whitespace collapsed, case folded."""
-    return " ".join(title.split()).casefold()
-
-
-@event.listens_for(Task, "before_insert")
-@event.listens_for(Task, "before_update")
-def _set_title_key(_mapper: object, _connection: object, task: Task) -> None:
-    task.title_key = title_key(task.title)
 
 
 for _trigger in TRIGGERS:

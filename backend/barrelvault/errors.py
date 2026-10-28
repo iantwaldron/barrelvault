@@ -1,7 +1,5 @@
 """Errors the service raises. The API and MCP map each kind to a response."""
 
-from datetime import datetime
-
 
 class ServiceError(Exception):
     """A call the service refused. The subclass says why, and the message says what."""
@@ -29,14 +27,3 @@ class Invalid(ServiceError):
 
 class Conflict(ServiceError):
     """The call does not fit the stored state, such as a taken name or a live key."""
-
-
-class Duplicate(Conflict):
-    """A create matched a task already in the account. It carries that task's fields."""
-
-    def __init__(self, task_id: int, title: str, status: int, due_at: datetime | None) -> None:
-        super().__init__("a task with this title and due_at already exists")
-        self.task_id = task_id
-        self.title = title
-        self.status = status
-        self.due_at = due_at

@@ -7,7 +7,6 @@ from sqlalchemy.exc import IntegrityError
 from barrelvault.account import add_agent
 from barrelvault.blocks import (
     add_block,
-    blocks_to_follow_up,
     edit_block_reason,
     list_blocks,
     release_block,
@@ -15,7 +14,7 @@ from barrelvault.blocks import (
 from barrelvault.errors import Conflict, Invalid, NotFound
 from barrelvault.models import User
 from barrelvault.status import COMPLETED, DROPPED, IN_PROGRESS
-from barrelvault.tasks import create_task, drop_task, get_task, task_history, update_task
+from barrelvault.tasks import create_task, get_task, task_history
 from tests.support import act_as, make_account, second_account
 
 
@@ -37,34 +36,32 @@ def test_a_block_marks_the_task_blocked_and_changed_without_a_snapshot(session, 
     assert block.reason == "Waiting on Chad's reply, asked Monday"
     assert (block.created_by, block.released_by, block.released_at) == (bot.id, None, None)
     blocked = get_task(session, ada, task.id)
-    assert blocked.blocked
+    assert [open_block.released_at for open_block in list_blocks(session, ada, task.id)] == [None]
     assert blocked.updated_by == bot.id and blocked.updated_at > task.updated_at
     before_release = get_task(session, ada, task.id)
     released = release_block(session, ada, block.id)
     assert released.released_by == ada.id and released.released_at is not None
     after_release = get_task(session, ada, task.id)
-    assert not after_release.blocked
+    assert list_blocks(session, ada, task.id)[0].released_at is not None
     assert after_release.updated_by == ada.id
     assert after_release.updated_at > before_release.updated_at
     assert len(task_history(session, ada, task.id)) == 1
 
 
-def test_a_block_change_makes_an_earlier_updated_at_stale(session, ada, bot):
+def test_every_block_change_moves_the_tasks_updated_at(session, ada, bot):
     task = create_task(session, ada, "Call Chad")
     block = add_block(session, ada, task.id, "Waiting on Chad")
     changes = (
-        lambda: add_block(session, ada, task.id, "Waiting on Sam"),
-        lambda: edit_block_reason(session, ada, block.id, "Waiting on Chad's reply"),
-        lambda: release_block(session, ada, block.id),
+        lambda: add_block(session, bot, task.id, "Waiting on Sam"),
+        lambda: edit_block_reason(session, bot, block.id, "Waiting on Chad's reply"),
+        lambda: release_block(session, bot, block.id),
     )
     for change in changes:
-        read = get_task(session, bot, task.id)
+        before = get_task(session, ada, task.id).updated_at
         change()
-        with pytest.raises(Conflict):
-            update_task(
-                session, bot, task.id, title="Call back", expected_updated_at=read.updated_at
-            )
-    assert get_task(session, ada, task.id).title == "Call Chad"
+        after = get_task(session, ada, task.id)
+        assert after.updated_at > before and after.updated_by == bot.id
+    assert len(task_history(session, ada, task.id)) == 1
 
 
 def test_a_block_is_added_only_to_an_open_task(session, ada):
@@ -130,24 +127,6 @@ def test_another_accounts_blocks_are_not_found(session, ada):
     for call in calls:
         with pytest.raises(NotFound):
             call()
-    assert blocks_to_follow_up(session, ada) == []
-    assert [block.id for block in blocks_to_follow_up(session, bea)] == [beas_block.id]
-
-
-def test_follow_ups_leave_out_released_blocks_and_effectively_dropped_tasks(session, ada):
-    project = create_task(session, ada, "Project")
-    step = create_task(session, ada, "Step", parent_id=project.id)
-    other = create_task(session, ada, "Other")
-    step_block = add_block(session, ada, step.id, "Waiting on the vendor")
-    other_block = add_block(session, ada, other.id, "Waiting on Chad")
-    released = add_block(session, ada, other.id, "Waiting on Sam")
-    release_block(session, ada, released.id)
-    assert [block.id for block in blocks_to_follow_up(session, ada)] == [
-        step_block.id,
-        other_block.id,
-    ]
-    drop_task(session, ada, project.id)
-    assert [block.id for block in blocks_to_follow_up(session, ada)] == [other_block.id]
 
 
 def test_the_schema_refuses_a_status_change_on_a_blocked_task(session, ada):
@@ -174,4 +153,3 @@ def test_an_agent_cannot_reach_another_accounts_blocks(session, ada, bot):
     for call in calls:
         with pytest.raises(NotFound):
             call()
-    assert blocks_to_follow_up(session, bot) == []

@@ -258,15 +258,6 @@ def test_open_for_stops_at_the_last_update_once_closed(session, ada):
     assert task.open_for() == timedelta(hours=1)
 
 
-def test_title_key_follows_the_title_and_stays_out_of_history(session, ada):
-    task = _task(session, ada, title="Café  Rent")
-    assert task.title_key == "café rent"
-    task.title = "STRASSE"
-    session.flush()
-    assert task.title_key == "strasse"
-    assert all("title_key" not in row.state for row in _history(session, task.id))
-
-
 def test_a_block_or_history_row_goes_only_with_its_task(session, ada):
     task = _task(session, ada)
     session.add(Block(task_id=task.id, reason="Waiting", created_by=ada, created_at=NOW))

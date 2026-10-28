@@ -19,7 +19,6 @@ from barrelvault.db import (
     BUSY_TIMEOUT_MS,
     apply_migrations,
     get_engine,
-    get_session,
     migration_config,
     open_session,
 )
@@ -82,17 +81,6 @@ def test_open_session_rolls_back(database):
         raise RuntimeError("fail")
     with open_session() as session:
         assert session.exec(select(User)).all() == []
-
-
-def test_get_session_commits(database):
-    SQLModel.metadata.create_all(get_engine())
-    generator = get_session()
-    session = next(generator)
-    session.add(User(name="Ada"))
-    with pytest.raises(StopIteration):
-        next(generator)
-    with open_session() as session:
-        assert session.exec(select(User)).one().name == "Ada"
 
 
 def test_foreign_keys_are_enforced(database):

@@ -91,12 +91,6 @@ def open_session(*, immediate: bool = True) -> Iterator[Session]:
         session.close()
 
 
-def get_session() -> Iterator[Session]:
-    """Yield the database session for one request."""
-    with open_session() as session:
-        yield session
-
-
 def apply_migrations() -> None:
     """Upgrade the database to the newest migration."""
     command.upgrade(migration_config(), "head")

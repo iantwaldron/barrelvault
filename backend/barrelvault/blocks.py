@@ -13,7 +13,7 @@ from barrelvault.account import account_of, actor_id
 from barrelvault.errors import Conflict, Invalid, NotFound
 from barrelvault.models import Block, Task, User
 from barrelvault.status import OPEN
-from barrelvault.tasks import load_tree, task_in_account, touch
+from barrelvault.tasks import task_in_account, touch
 from barrelvault.times import as_utc, now
 
 
@@ -74,23 +74,6 @@ def list_blocks(session: Session, actor: User, task_id: int) -> list[BlockView]:
         select(Block).where(Block.task_id == task_id).order_by(col(Block.created_at), col(Block.id))
     )
     return [_view(block) for block in session.exec(query)]
-
-
-def blocks_to_follow_up(session: Session, actor: User) -> list[BlockView]:
-    """Every open block in the account, leaving out effectively dropped tasks."""
-    owner = account_of(session, actor)
-    tree = load_tree(session, owner.user_id)
-    query = (
-        select(Block)
-        .join(Task, col(Task.id) == Block.task_id)
-        .where(Task.owned_by == owner.user_id, col(Block.released_at).is_(None))
-        .order_by(col(Block.created_at), col(Block.id))
-    )
-    return [
-        _view(block)
-        for block in session.exec(query)
-        if not tree.is_effectively_dropped(block.task_id)
-    ]
 
 
 def _block(session: Session, actor: User, block_id: int) -> tuple[Block, Task]:

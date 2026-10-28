@@ -15,6 +15,8 @@ The frontend client is generated from the API's OpenAPI schema with `openapi-typ
 
 One FastAPI process serves the HTTP routes.
 
+A response carries only what the call asked for: a task, one level, or a subtree, never the whole account by default. An agent pays for every row in its context. The API and MCP return `notes` and `dropped_reason` as text a person or agent wrote, and the MCP marks them as content, not instructions. The frontend renders `notes` as markdown with raw HTML off.
+
 | route  | serves               |
 | ------ | -------------------- |
 | `/`    | built frontend       |
@@ -110,6 +112,8 @@ Tests cover a login with the person's password, a wrong password, an exchange wi
 
 A task may contain tasks, with the same fields at every depth. An empty `parent_id` is a root, and a root need not have children. The default read is one level: roots, or the direct children of a parent. `tree` returns every task under that parent. In v0.1 every list, `tree` included, is ordered by `created_at`, then `id`. A later priority or grouping order replaces it.
 
+In v0.1 a read loads the account's tasks with one query, selecting the columns the tree needs and not `notes`, and a pure function builds the tree from those rows by grouping them on `parent_id`. The same function serves the one-level read, `tree`, the cycle check, and the dropped state below. A write that depends on the tree, such as the cycle check, loads it inside its own transaction. A later version may load a subtree with a recursive query instead, behind that same function.
+
 | column           | type     | notes                                                     |
 | ---------------- | -------- | --------------------------------------------------------- |
 | id               | int      | pk                                                        |
@@ -117,7 +121,7 @@ A task may contain tasks, with the same fields at every depth. An empty `parent_
 | title            | text     | required                                                  |
 | notes            | text     | markdown, nullable; a URL is written here                 |
 | tags             | text     | nullable; whitespace-separated tokens; save stores `""`   |
-| status           | smallint | `0` todo, `1` in_progress, `2` completed; default `0`     |
+| status           | smallint | `0` todo, `1` in_progress, `2` completed, `3` dropped; default `0` |
 | estimate_minutes | smallint | nullable                                                  |
 | due_at           | datetime | UTC, nullable; a deadline, not a rank                     |
 | created_by       | int      | FK to User, the creator                                   |
@@ -128,7 +132,7 @@ A task may contain tasks, with the same fields at every depth. An empty `parent_
 
 Every task and block read and write is limited to the acting user's account: `owned_by` must be the person's user id, or the acting agent's `owner_id`. A task in another account is treated as a missing id. Within the account, the person and every agent have the same control over tasks and blocks, deletes included. A task or block call names its acting user, and the service does not read a session. The API and MCP take the acting user from the session they validated. Another surface, such as a CLI, supplies it its own way. Tests create a second account and refuse a read, an update, a delete, a nest under its task, and a block add, edit, or release on its task.
 
-The person or an agent can change `title`, `notes`, `tags`, `status`, `estimate_minutes`, `due_at`, and `parent_id`. Any status change is allowed, including a completed task back to todo. `title` is required and is not blank after trimming. `status` is `0`, `1`, or `2`. `estimate_minutes` is from 0 through 32767.
+The person or an agent can change `title`, `notes`, `tags`, `status`, `estimate_minutes`, `due_at`, and `parent_id`. Any status change is allowed, including a completed or dropped task back to todo, except on a blocked task, as the Block section says. `title` is required and is not blank after trimming. `status` is `0`, `1`, `2`, or `3`. `estimate_minutes` is from 0 through 32767.
 
 An update changes only the fields the caller sends, and every other field keeps its stored value. Two fields also take an operation applied to the stored value inside the write: appending text to `notes`, and adding or removing tags. A caller that adds to a field uses the operation rather than reading the field and writing it back, so a change made between its read and its write is kept. An append to empty `notes` stores the text alone. An append to existing `notes` adds a blank line and then the text.
 
@@ -136,15 +140,27 @@ An update may carry the `updated_at` the caller read. When the stored `updated_a
 
 `owned_by` is set once at create and stays put. The person stores their own user id. An agent stores its `owner_id`. The service rejects a write whose `owned_by` is not the human's user id. Tests cover a create by the person, a create by an agent, an `owned_by` set to an agent id, an `owned_by` set to an id that is not the human, and an update that tries to change `owned_by`. `created_by` and `created_at` stay put for the life of the row. `created_by` is the acting user's id. Do not default it to a string. A Human profile on `created_by` means the person created the task. An Agent profile means an agent created it. `updated_at` and `updated_by` change when the task row changes, and when a block on that task changes. `updated_by` is the acting user. On create it is the same user as `created_by`, and `updated_at` equals `created_at`. Adding or releasing a block does not write a history snapshot.
 
-How long a task has been open is a model function, not a stored column. For a completed task it is `updated_at` minus `created_at`. For any other status it is the current UTC time minus `created_at`. A later edit of a completed task moves `updated_at`, and the span moves with it. Block intervals are not subtracted.
+How long a task has been open is a model function, not a stored column. For a completed or dropped task it is `updated_at` minus `created_at`. For any other status it is the current UTC time minus `created_at`. A later edit of a completed task moves `updated_at`, and the span moves with it. Block intervals are not subtracted.
 
 Every nullable text column reads through `value or ""`. `None` becomes `""` before a caller or the client sees it. In v0.1 those columns are `notes` and `tags`. A test inserts a task with raw SQL, sets each of them to null, and reads them back through that path. Each read yields `""`. The insert stays outside the ORM.
 
-Completing a parent leaves its children open. A finished task stays until it is deleted.
+Todo and in_progress are open. Completed and dropped are closed. Completing a parent leaves its children open. A finished task stays until it is deleted.
+
+Dropped is for a task that stopped mattering without being done: superseded, a duplicate, or no longer wanted. Dropping a task changes only its own row. A task is effectively dropped when it or any ancestor is dropped, and the tree function works that out on read, so a descendant keeps its own status and comes back as it was when the ancestor is reopened or when it is moved out from under it. Completed does not pass down. A read of open work leaves out effectively dropped tasks. Tests cover a child under a dropped parent read as effectively dropped with its own status kept, the parent reopened and the child back, the child moved out and back, and a completed parent whose children stay open.
+
+The drop call may take a reason. It sets `status` to `3` and appends the reason to `notes` in one write, as a fenced block labeled `dropped`:
+
+````
+```dropped
+Superseded by the Q3 plan.
+```
+````
+
+A read of a dropped task returns `dropped_reason`, the text of the last such block, and an open or completed task returns `""`. A pure function finds the block with plain string matching. It does not use a markdown library, and its output is plain text that is never evaluated or passed to a template. Reopening a task leaves the block in `notes` as the record. Tests cover a drop with a reason, a drop without one, two drops with the later reason returned, a reopened task returning `""`, and a block-shaped string in a reason that is returned as text.
 
 Nesting and detaching change `parent_id`. Setting it to another task nests this task under that parent. A new task may be created already nested. The cycle check walks the ancestor chain and rejects the task itself, a descendant, a missing id, or a task in another account. Clearing `parent_id` detaches the task and makes it a root. Children stay under the moved task, and no rows are deleted.
 
-Deleting a task removes that row. The `parent_id` cascade deletes the subtree with it, along with those tasks' blocks and history. There is no tombstone.
+Deleting a task removes that row. The `parent_id` cascade deletes the subtree with it, along with those tasks' blocks and history. There is no tombstone. Delete is for a mistake, such as a task created in error. Dropping is how a task stops mattering, and the MCP tool descriptions steer an agent to drop rather than delete.
 
 ### Tags
 
@@ -167,6 +183,8 @@ A repo, pull request, or any other URL is written in the notes. There is no link
 ### Block
 
 A block is a row on a task. The task is blocked while it has at least one open block. A block is open while `released_at` is empty. Several blocks may be open, and each is released on its own. Releasing a block sets `released_by` to the acting user and `released_at` to the current UTC time. A released block cannot be released again or reopened. The row stays. The task's status stays as it is.
+
+A block is added only to an open task, todo or in_progress. While a task has an open block, its status does not change, in either direction. Closing a blocked task, by completing or dropping it, is refused as a conflict, unless the call asks to release the open blocks first: then it releases each one, as the acting user and at the current time, and changes the status in the same transaction. Triggers in the schema refuse a block added to a closed task and a status change on a task with an open block. An agent following up on open blocks leaves out effectively dropped tasks. Tests cover a block added to a completed and to a dropped task, refused, a status change on a blocked task, refused in each direction, a close that releases its blocks first, and a raw-SQL status change on a blocked task, refused by the schema.
 
 `reason` is one line naming what the task is waiting on and who was asked. It is required, is not blank after trimming, and can be edited. A block is deleted only with its task. A due date can pass while a block is open. An open block is the record an agent uses to bump the user, or to draft a follow-up to the person being waited on.
 

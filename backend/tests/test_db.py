@@ -22,22 +22,7 @@ from barrelvault.db import (
     open_session,
 )
 from barrelvault.models import Token, User
-
-
-def _clear_engine():
-    engine = db._engine
-    if engine is not None:
-        engine.dispose()
-    db._engine = None
-
-
-@pytest.fixture(autouse=True)
-def database(monkeypatch, tmp_path):
-    path = tmp_path / "barrelvault.db"
-    monkeypatch.setenv("BARRELVAULT_DB", str(path))
-    _clear_engine()
-    yield path
-    _clear_engine()
+from tests.support import reset_engine
 
 
 def test_one_engine_for_the_process(database):
@@ -54,7 +39,7 @@ def test_database_file_is_created_when_a_session_connects(database):
 def test_missing_parent_directory_is_created(monkeypatch, tmp_path):
     path = tmp_path / "nested" / "barrelvault.db"
     monkeypatch.setenv("BARRELVAULT_DB", str(path))
-    _clear_engine()
+    reset_engine()
     with open_session() as session:
         session.connection()
     assert path.is_file()

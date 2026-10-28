@@ -7,20 +7,10 @@ import pytest
 from sqlalchemy import text
 from sqlmodel import select
 
-from barrelvault import auth, db
+from barrelvault import auth
 from barrelvault.cli import main
 from barrelvault.db import apply_migrations, open_session
 from barrelvault.models import Human, User
-
-
-@pytest.fixture
-def database(monkeypatch, tmp_path):
-    path = tmp_path / "barrelvault.db"
-    monkeypatch.setenv("BARRELVAULT_DB", str(path))
-    monkeypatch.delenv("BARRELVAULT_PASSWORD", raising=False)
-    _clear_engine()
-    yield path
-    _clear_engine()
 
 
 def test_setup_creates_the_account(database, monkeypatch, capsys):
@@ -196,8 +186,3 @@ def _reject_prompts(monkeypatch) -> list[str]:
     monkeypatch.setattr("barrelvault.cli.getpass.getpass", rejected)
     return prompts
 
-
-def _clear_engine() -> None:
-    if db._engine is not None:
-        db._engine.dispose()
-    db._engine = None

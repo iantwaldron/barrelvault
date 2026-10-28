@@ -23,11 +23,12 @@ _engine: Engine | None = None
 def get_engine() -> Engine:
     global _engine
     if _engine is None:
-        _engine = _build_engine(load_settings().db_path)
+        _engine = build_engine(load_settings().db_path)
     return _engine
 
 
-def _build_engine(db_path: str) -> Engine:
+def build_engine(db_path: str) -> Engine:
+    """An engine for one SQLite file, configured the same way everywhere, tests included."""
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     engine = create_engine(

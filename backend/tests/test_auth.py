@@ -1,13 +1,13 @@
+import sqlite3
 import threading
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import event, text
-from sqlalchemy.pool import StaticPool
-from sqlmodel import Session, SQLModel, create_engine, select
+from sqlmodel import Session, SQLModel, select
 
 from barrelvault import auth, db
-from barrelvault.account import IssuedKey, add_agent, create_account, issue_key, retire_agent
+from barrelvault.account import create_account, retire_agent
 from barrelvault.auth import (
     ServiceError,
     authenticate,
@@ -15,47 +15,8 @@ from barrelvault.auth import (
     login,
     logout,
 )
-from barrelvault.models import Agent, Human, Token, User
-from barrelvault.settings import DEFAULT_KEY_LENGTH, DEFAULT_SESSION_LENGTH
-
-KEY_LENGTH = DEFAULT_KEY_LENGTH
-SESSION_LENGTH = DEFAULT_SESSION_LENGTH
-
-
-@pytest.fixture
-def session():
-    engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-
-    @event.listens_for(engine, "connect")
-    def _foreign_keys(dbapi_connection, _record):
-        cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.close()
-
-    SQLModel.metadata.create_all(engine)
-    with Session(engine) as db_session:
-        yield db_session
-
-
-def _actor(session: Session, secret: str) -> User:
-    """Authenticate the way the API does, then act as that user."""
-    return authenticate(session, secret)
-
-
-def _account(session: Session) -> tuple[Human, str]:
-    human = create_account(session, "Ada", "ada@example.com", "password-1")
-    secret = login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
-    return human, secret
-
-
-def _live_agent(session: Session, secret: str, name: str = "Bot") -> tuple[Agent, IssuedKey]:
-    agent = add_agent(session, _actor(session, secret), name)
-    issued = issue_key(session, _actor(session, secret), agent.user_id, key_length=KEY_LENGTH)
-    return agent, issued
+from barrelvault.models import Token, User
+from tests.support import SESSION_LENGTH, act_as, live_agent, make_account, update_agent, update_token
 
 
 def _tokens(session: Session) -> list[Token]:
@@ -66,7 +27,7 @@ def test_login_and_exchange_store_the_actor_and_expiry(session):
     before = datetime.now(UTC)
     human = create_account(session, "Ada", "ada@example.com", "password-1")
     secret = login(session, "ada@example.com", "password-1", session_length=100)
-    agent, issued = _live_agent(session, secret)
+    agent, issued = live_agent(session, secret)
     agent_secret = exchange_key(session, issued.key, session_length=100)
     after = datetime.now(UTC)
     rows = {token.user_id: token for token in _tokens(session)}
@@ -76,8 +37,6 @@ def test_login_and_exchange_store_the_actor_and_expiry(session):
         assert token.expires_at <= after + timedelta(seconds=100)
     assert authenticate(session, secret).id == human.user_id
     assert authenticate(session, agent_secret).id == agent.user_id
-
-
 
 
 def test_wrong_email_and_wrong_password_are_the_same_failure(session, monkeypatch):
@@ -116,7 +75,7 @@ def test_refused_mint_leaves_the_existing_session(session):
     create_account(session, "Ada", "ada@example.com", "password-1")
     secret = login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
     token_id = _tokens(session)[0].id
-    agent, issued = _live_agent(session, secret)
+    agent, issued = live_agent(session, secret)
     with pytest.raises(ServiceError):
         login(session, "ada@example.com", "wrong-password", session_length=SESSION_LENGTH)
     with pytest.raises(ServiceError):
@@ -125,17 +84,17 @@ def test_refused_mint_leaves_the_existing_session(session):
         exchange_key(session, secret, session_length=SESSION_LENGTH)
     with pytest.raises(ServiceError):
         exchange_key(session, "missing-key", session_length=SESSION_LENGTH)
-    _update_agent(
+    update_agent(
         session,
         agent.user_id,
         key_expires_at=(datetime.now(UTC) - timedelta(seconds=1)).isoformat(),
     )
     with pytest.raises(ServiceError):
         exchange_key(session, issued.key, session_length=SESSION_LENGTH)
-    _update_agent(session, agent.user_id, key_hash=None, key_expires_at=None)
+    update_agent(session, agent.user_id, key_hash=None, key_expires_at=None)
     with pytest.raises(ServiceError):
         exchange_key(session, issued.key, session_length=SESSION_LENGTH)
-    retire_agent(session, _actor(session, secret), agent.user_id)
+    retire_agent(session, act_as(session, secret), agent.user_id)
     with pytest.raises(ServiceError):
         exchange_key(session, issued.key, session_length=SESSION_LENGTH)
     human_token = session.exec(select(Token).where(Token.user_id != agent.user_id)).one()
@@ -174,8 +133,6 @@ def test_a_second_mint_replaces_the_row(session):
             authenticate(session, first)
     finally:
         event.remove(Token, "before_update", _updated)
-
-
 
 
 def test_a_mint_without_an_expiry_is_refused(session, monkeypatch):
@@ -233,7 +190,7 @@ def test_authenticate_refuses_unknown_and_expired_secrets(session):
     with pytest.raises(ServiceError):
         authenticate(session, _issued_key(session, secret))
     token = _tokens(session)[0]
-    _update_token(
+    update_token(
         session,
         token.user_id,
         expires_at=(datetime.now(UTC) - timedelta(seconds=1)).isoformat(),
@@ -251,12 +208,14 @@ def test_authenticate_refuses_a_session_whose_user_is_gone(session):
     human = create_account(session, "Ada", "ada@example.com", "password-1")
     secret = login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
     session.commit()
-    connection = session.connection()
-    connection.execute(text("PRAGMA foreign_keys=OFF"))
-    connection.execute(
-        text("DELETE FROM user WHERE id = :user_id"),
-        {"user_id": human.user_id},
-    )
+    # Foreign keys only switch off outside a transaction, so use a bare connection.
+    raw = sqlite3.connect(session.get_bind().url.database)
+    raw.execute("PRAGMA foreign_keys=OFF")
+    raw.execute("DELETE FROM user WHERE id = ?", (human.user_id,))
+    raw.commit()
+    raw.close()
+    # End the read transaction that loaded human.user_id, so the delete is visible.
+    session.rollback()
     session.expunge_all()
     with pytest.raises(ServiceError):
         authenticate(session, secret)
@@ -264,10 +223,10 @@ def test_authenticate_refuses_a_session_whose_user_is_gone(session):
 
 
 def test_a_dead_agent_key_deletes_that_session_only(session):
-    human, secret = _account(session)
-    agent, issued = _live_agent(session, secret)
+    human, secret = make_account(session)
+    agent, issued = live_agent(session, secret)
     agent_secret = exchange_key(session, issued.key, session_length=SESSION_LENGTH)
-    _update_agent(session, agent.user_id, key_hash=None, key_expires_at=None)
+    update_agent(session, agent.user_id, key_hash=None, key_expires_at=None)
     session.commit()
     with pytest.raises(ServiceError):
         authenticate(session, agent_secret)
@@ -276,10 +235,10 @@ def test_a_dead_agent_key_deletes_that_session_only(session):
 
 
 def test_a_retired_agent_session_is_deleted_and_refused(session):
-    human, secret = _account(session)
-    agent, issued = _live_agent(session, secret)
+    human, secret = make_account(session)
+    agent, issued = live_agent(session, secret)
     agent_secret = exchange_key(session, issued.key, session_length=SESSION_LENGTH)
-    _update_agent(session, agent.user_id, retired_at=datetime.now(UTC).isoformat())
+    update_agent(session, agent.user_id, retired_at=datetime.now(UTC).isoformat())
     session.commit()
     with pytest.raises(ServiceError):
         authenticate(session, agent_secret)
@@ -287,17 +246,15 @@ def test_a_retired_agent_session_is_deleted_and_refused(session):
     assert authenticate(session, secret).id == human.user_id
 
 
-def test_dead_agent_key_stays_deleted_when_the_request_rolls_back(tmp_path, monkeypatch):
-    monkeypatch.setenv("BARRELVAULT_DB", str(tmp_path / "barrelvault.db"))
-    _reset_engine()
+def test_dead_agent_key_stays_deleted_when_the_request_rolls_back(database):
     SQLModel.metadata.create_all(db.get_engine())
     with db.open_session() as db_session:
-        _human, secret = _account(db_session)
-        agent, issued = _live_agent(db_session, secret)
+        _human, secret = make_account(db_session)
+        agent, issued = live_agent(db_session, secret)
         agent_secret = exchange_key(db_session, issued.key, session_length=SESSION_LENGTH)
         agent_id = agent.user_id
     with db.open_session() as db_session:
-        _update_agent(
+        update_agent(
             db_session,
             agent_id,
             key_expires_at=(datetime.now(UTC) - timedelta(seconds=1)).isoformat(),
@@ -311,14 +268,13 @@ def test_dead_agent_key_stays_deleted_when_the_request_rolls_back(tmp_path, monk
         assert db_session.exec(select(Token).where(Token.user_id == agent_id)).first() is None
         assert db_session.exec(select(User).where(User.name == "Unsaved")).first() is None
         assert authenticate(db_session, secret).name == "Ada"
-    _reset_engine()
 
 
 def test_dead_agent_key_delete_survives_a_session_closed_without_commit(session):
-    _human, secret = _account(session)
-    agent, issued = _live_agent(session, secret)
+    _human, secret = make_account(session)
+    agent, issued = live_agent(session, secret)
     agent_secret = exchange_key(session, issued.key, session_length=SESSION_LENGTH)
-    _update_agent(session, agent.user_id, key_hash=None, key_expires_at=None)
+    update_agent(session, agent.user_id, key_hash=None, key_expires_at=None)
     session.commit()
     request = Session(session.get_bind())
     request.add(User(name="Unsaved"))
@@ -330,10 +286,10 @@ def test_dead_agent_key_delete_survives_a_session_closed_without_commit(session)
 
 
 def test_dead_agent_key_delete_commits_with_the_caller(session):
-    _human, secret = _account(session)
-    agent, issued = _live_agent(session, secret)
+    _human, secret = make_account(session)
+    agent, issued = live_agent(session, secret)
     agent_secret = exchange_key(session, issued.key, session_length=SESSION_LENGTH)
-    _update_agent(session, agent.user_id, key_hash=None, key_expires_at=None)
+    update_agent(session, agent.user_id, key_hash=None, key_expires_at=None)
     session.commit()
     with pytest.raises(ServiceError):
         authenticate(session, agent_secret)
@@ -365,7 +321,7 @@ def test_a_naive_expiry_is_still_compared_in_utc(session):
     create_account(session, "Ada", "ada@example.com", "password-1")
     secret = login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
     token = _tokens(session)[0]
-    _update_token(session, token.user_id, expires_at="2000-01-01 00:00:00")
+    update_token(session, token.user_id, expires_at="2000-01-01 00:00:00")
     with pytest.raises(ServiceError):
         authenticate(session, secret)
     assert len(_tokens(session)) == 1
@@ -389,9 +345,7 @@ def test_logout_deletes_the_row(session):
     assert _tokens(session) == []
 
 
-def test_overlapping_mints_leave_one_session(tmp_path, monkeypatch):
-    monkeypatch.setenv("BARRELVAULT_DB", str(tmp_path / "barrelvault.db"))
-    _reset_engine()
+def test_overlapping_mints_leave_one_session(database):
     SQLModel.metadata.create_all(db.get_engine())
     with db.open_session() as db_session:
         human = create_account(db_session, "Ada", "ada@example.com", "password-1")
@@ -424,32 +378,10 @@ def test_overlapping_mints_leave_one_session(tmp_path, monkeypatch):
             except ServiceError:
                 pass
         assert accepted == [user_id]
-    _reset_engine()
 
 
 def _issued_key(session: Session, secret: str) -> str:
-    _agent, issued = _live_agent(session, secret, "Keyed")
+    _agent, issued = live_agent(session, secret, "Keyed")
     return issued.key
 
 
-def _update_agent(session: Session, user_id: int, **values: object) -> None:
-    _update_row(session, "agent", user_id, values)
-
-
-def _update_token(session: Session, user_id: int, **values: object) -> None:
-    _update_row(session, "token", user_id, values)
-
-
-def _update_row(session: Session, table: str, user_id: int, values: dict[str, object]) -> None:
-    assignments = ", ".join(f"{column} = :{column}" for column in values)
-    session.connection().execute(
-        text(f"UPDATE {table} SET {assignments} WHERE user_id = :user_id"),
-        {"user_id": user_id, **values},
-    )
-    session.expire_all()
-
-
-def _reset_engine() -> None:
-    if db._engine is not None:
-        db._engine.dispose()
-    db._engine = None

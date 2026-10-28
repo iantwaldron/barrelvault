@@ -2,35 +2,12 @@ import hashlib
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import event, text
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.pool import StaticPool
-from sqlmodel import Session, SQLModel, create_engine, select
+from sqlmodel import Session, select
 
 from barrelvault.models import Agent, Human, Token, User
-from barrelvault.settings import DEFAULT_KEY_LENGTH, DEFAULT_SESSION_LENGTH
-
-KEY_LENGTH = DEFAULT_KEY_LENGTH
-SESSION_LENGTH = DEFAULT_SESSION_LENGTH
-
-
-@pytest.fixture
-def session():
-    engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-
-    @event.listens_for(engine, "connect")
-    def _foreign_keys(dbapi_connection, _record):
-        cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.close()
-
-    SQLModel.metadata.create_all(engine)
-    with Session(engine) as db:
-        yield db
+from tests.support import KEY_LENGTH
 
 
 def _user(session: Session, name: str) -> User:
@@ -218,8 +195,6 @@ def test_generate_key_stores_the_hash_and_expiry(session):
     assert agent.retired_at == retired_at
 
 
-
-
 def test_generate_key_replaces_the_previous_key(session):
     agent = _agent(session, _human(session), "Bot")
     first = agent.generate_key(KEY_LENGTH)
@@ -316,8 +291,6 @@ def test_generate_secret_stores_the_hash_and_expiry(session):
     ).scalar_one()
     assert stored == token.secret_hash
     assert raw not in stored
-
-
 
 
 def test_generate_secret_replaces_the_previous_secret(session):

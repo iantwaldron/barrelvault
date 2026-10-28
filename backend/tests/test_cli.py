@@ -185,4 +185,3 @@ def _reject_prompts(monkeypatch) -> list[str]:
     monkeypatch.setattr("builtins.input", rejected)
     monkeypatch.setattr("barrelvault.cli.getpass.getpass", rejected)
     return prompts
-

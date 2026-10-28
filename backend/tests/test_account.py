@@ -305,7 +305,9 @@ def test_profile_changes_are_refused(session):
         lambda: session.delete(session.get(Human, human.user_id)),
         lambda: session.add(Agent(user_id=human.user_id, owner_id=human.user_id)),
     )
-    refused(IntegrityError, lambda: session.add(Agent(user_id=human.user_id, owner_id=human.user_id)))
+    refused(
+        IntegrityError, lambda: session.add(Agent(user_id=human.user_id, owner_id=human.user_id))
+    )
     # An agent user cannot become a human. Only setup adds a Human through the ORM.
     refused(
         ServiceError,
@@ -345,8 +347,12 @@ def test_an_acting_agent_cannot_change_agents(session):
     agent_secret = exchange_key(session, issued.key, session_length=SESSION_LENGTH)
     calls = (
         lambda: add_agent(session, act_as(session, agent_secret), "Other"),
-        lambda: issue_key(session, act_as(session, agent_secret), agent.user_id, key_length=KEY_LENGTH),
-        lambda: roll_key(session, act_as(session, agent_secret), agent.user_id, key_length=KEY_LENGTH),
+        lambda: issue_key(
+            session, act_as(session, agent_secret), agent.user_id, key_length=KEY_LENGTH
+        ),
+        lambda: roll_key(
+            session, act_as(session, agent_secret), agent.user_id, key_length=KEY_LENGTH
+        ),
         lambda: retire_agent(session, act_as(session, agent_secret), agent.user_id),
         lambda: reassign_agent(session, act_as(session, agent_secret), agent.user_id),
         lambda: delete_agent(session, act_as(session, agent_secret), agent.user_id),
@@ -367,7 +373,9 @@ def test_a_human_cannot_change_another_accounts_agent(session):
     bea_bot_secret = exchange_key(session, bea_key.key, session_length=SESSION_LENGTH)
     session.commit()
     calls = (
-        lambda: issue_key(session, act_as(session, secret), bea_bare.user_id, key_length=KEY_LENGTH),
+        lambda: issue_key(
+            session, act_as(session, secret), bea_bare.user_id, key_length=KEY_LENGTH
+        ),
         lambda: roll_key(session, act_as(session, secret), bea_bot.user_id, key_length=KEY_LENGTH),
         lambda: retire_agent(session, act_as(session, secret), bea_bot.user_id),
         lambda: delete_agent(session, act_as(session, secret), bea_bare.user_id),
@@ -463,12 +471,12 @@ def test_reassign_moves_references_and_keeps_owned_by(session):
     assert session.get(Agent, agent.user_id) is None
     assert session.get(User, agent.user_id) is None
     assert session.get(Human, human.user_id) is not None
-    task = session.connection().execute(
-        text("SELECT created_by, updated_by, owned_by FROM task")
-    ).one()
-    block = session.connection().execute(
-        text("SELECT created_by, released_by FROM block")
-    ).one()
+    task = (
+        session.connection()
+        .execute(text("SELECT created_by, updated_by, owned_by FROM task"))
+        .one()
+    )
+    block = session.connection().execute(text("SELECT created_by, released_by FROM block")).one()
     history = session.connection().execute(text("SELECT user_id FROM task_history")).one()
     assert task == (human.user_id, human.user_id, human.user_id)
     assert block == (human.user_id, human.user_id)
@@ -499,11 +507,31 @@ def test_each_refusal_names_its_kind(session):
         (Forbidden, "only a person changes agents", lambda: add_agent(session, bot, "Other")),
         (NotFound, "no such agent", lambda: retire_agent(session, ada, 9999)),
         (NotFound, "no such agent", lambda: retire_agent(session, ada, bea_bot.user_id)),
-        (Conflict, "agent already has a key", lambda: issue_key(session, ada, keyed.user_id, key_length=KEY_LENGTH)),
-        (Conflict, "agent has no key", lambda: roll_key(session, ada, bare.user_id, key_length=KEY_LENGTH)),
-        (Conflict, "agent is retired", lambda: issue_key(session, ada, retired.user_id, key_length=KEY_LENGTH)),
-        (Conflict, "agent is retired", lambda: roll_key(session, ada, retired.user_id, key_length=KEY_LENGTH)),
-        (Conflict, "setup has already run", lambda: create_account(session, "Eve", "e@example.com", "pw")),
+        (
+            Conflict,
+            "agent already has a key",
+            lambda: issue_key(session, ada, keyed.user_id, key_length=KEY_LENGTH),
+        ),
+        (
+            Conflict,
+            "agent has no key",
+            lambda: roll_key(session, ada, bare.user_id, key_length=KEY_LENGTH),
+        ),
+        (
+            Conflict,
+            "agent is retired",
+            lambda: issue_key(session, ada, retired.user_id, key_length=KEY_LENGTH),
+        ),
+        (
+            Conflict,
+            "agent is retired",
+            lambda: roll_key(session, ada, retired.user_id, key_length=KEY_LENGTH),
+        ),
+        (
+            Conflict,
+            "setup has already run",
+            lambda: create_account(session, "Eve", "e@example.com", "pw"),
+        ),
         (Invalid, "email is required", lambda: create_account(session, "Eve", " ", "pw")),
     )
     for kind, message, call in cases:
@@ -538,9 +566,7 @@ def _attach(session: Session, agent_user_id: int, human_user_id: int) -> None:
     connection.execute(
         text("CREATE TABLE block (id INTEGER PRIMARY KEY, created_by INTEGER, released_by INTEGER)")
     )
-    connection.execute(
-        text("CREATE TABLE task_history (id INTEGER PRIMARY KEY, user_id INTEGER)")
-    )
+    connection.execute(text("CREATE TABLE task_history (id INTEGER PRIMARY KEY, user_id INTEGER)"))
     connection.execute(
         text(
             "INSERT INTO task (created_by, updated_by, owned_by) "

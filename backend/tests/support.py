@@ -56,7 +56,9 @@ def set_token_expiry(session: Session, user_id: int, expires_at: str) -> None:
     row = dict(
         connection.execute(
             text("SELECT * FROM token WHERE user_id = :user_id"), {"user_id": user_id}
-        ).mappings().one()
+        )
+        .mappings()
+        .one()
     )
     connection.execute(text("DELETE FROM token WHERE user_id = :user_id"), {"user_id": user_id})
     row["expires_at"] = expires_at

@@ -28,10 +28,7 @@ def _human(session: Session, name: str = "Ada", email: str = "ada@example.com") 
 
 def _insert_human(session: Session, user_id: int, email: str) -> None:
     session.connection().execute(
-        text(
-            "INSERT INTO human (user_id, email, password_hash) "
-            "VALUES (:user_id, :email, 'hash')"
-        ),
+        text("INSERT INTO human (user_id, email, password_hash) VALUES (:user_id, :email, 'hash')"),
         {"user_id": user_id, "email": email},
     )
 
@@ -182,10 +179,14 @@ def test_generate_key_stores_the_hash_and_expiry(session):
     assert len(bytes.fromhex(raw)) == 32
     assert agent.key_hash == hashlib.sha256(raw.encode()).hexdigest()
     assert raw != agent.key_hash
-    stored = session.connection().execute(
-        text("SELECT key_hash FROM agent WHERE user_id = :user_id"),
-        {"user_id": agent.user_id},
-    ).scalar_one()
+    stored = (
+        session.connection()
+        .execute(
+            text("SELECT key_hash FROM agent WHERE user_id = :user_id"),
+            {"user_id": agent.user_id},
+        )
+        .scalar_one()
+    )
     assert stored == agent.key_hash
     assert raw not in stored
     assert agent.key_expires_at is not None
@@ -283,10 +284,14 @@ def test_generate_secret_stores_the_hash_and_expiry(session):
     assert raw != token.secret_hash
     assert before <= token.created_at <= after
     assert token.expires_at == token.created_at + timedelta(seconds=100)
-    stored = session.connection().execute(
-        text("SELECT secret_hash FROM token WHERE user_id = :user_id"),
-        {"user_id": user.id},
-    ).scalar_one()
+    stored = (
+        session.connection()
+        .execute(
+            text("SELECT secret_hash FROM token WHERE user_id = :user_id"),
+            {"user_id": user.id},
+        )
+        .scalar_one()
+    )
     assert stored == token.secret_hash
     assert raw not in stored
 

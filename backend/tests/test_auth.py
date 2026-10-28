@@ -259,8 +259,6 @@ def test_a_dead_agent_key_deletes_that_session_only(session):
     assert authenticate(session, secret).id == human.user_id
 
 
-
-
 def test_dead_agent_key_stays_deleted_when_the_request_rolls_back(database):
     SQLModel.metadata.create_all(db.get_engine())
     with db.open_session() as db_session:
@@ -401,5 +399,3 @@ def test_overlapping_mints_leave_one_session(database):
 def _issued_key(session: Session, secret: str) -> str:
     _agent, issued = live_agent(session, secret, "Keyed")
     return issued.key
-
-

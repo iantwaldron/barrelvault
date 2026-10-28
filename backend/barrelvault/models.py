@@ -31,9 +31,7 @@ class Human(SQLModel, table=True):
 
 class Agent(SQLModel, table=True):
     __table_args__ = (
-        CheckConstraint(
-            "(key_hash IS NULL) = (key_expires_at IS NULL)", name="ck_agent_key_pair"
-        ),
+        CheckConstraint("(key_hash IS NULL) = (key_expires_at IS NULL)", name="ck_agent_key_pair"),
         CheckConstraint(
             "retired_at IS NULL OR key_hash IS NULL", name="ck_agent_retired_without_key"
         ),

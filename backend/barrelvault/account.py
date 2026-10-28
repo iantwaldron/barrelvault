@@ -176,10 +176,14 @@ def _attached(session: Session, user_id: int) -> bool:
         if table not in names:
             continue
         for column in columns:
-            row = session.connection().execute(
-                text(f"SELECT 1 FROM {table} WHERE {column} = :user_id LIMIT 1"),
-                {"user_id": user_id},
-            ).first()
+            row = (
+                session.connection()
+                .execute(
+                    text(f"SELECT 1 FROM {table} WHERE {column} = :user_id LIMIT 1"),
+                    {"user_id": user_id},
+                )
+                .first()
+            )
             if row is not None:
                 return True
     return False
@@ -195,17 +199,14 @@ def _move_references(session: Session, agent_user_id: int, human_user_id: int) -
                 continue
             session.connection().execute(
                 text(
-                    f"UPDATE {table} SET {column} = :human_user_id "
-                    f"WHERE {column} = :agent_user_id"
+                    f"UPDATE {table} SET {column} = :human_user_id WHERE {column} = :agent_user_id"
                 ),
                 {"human_user_id": human_user_id, "agent_user_id": agent_user_id},
             )
 
 
 def _table_names(session: Session) -> set[str]:
-    rows = session.connection().execute(
-        text("SELECT name FROM sqlite_master WHERE type = 'table'")
-    )
+    rows = session.connection().execute(text("SELECT name FROM sqlite_master WHERE type = 'table'"))
     return {str(row[0]) for row in rows}
 
 

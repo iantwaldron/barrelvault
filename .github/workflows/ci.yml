@@ -4,9 +4,16 @@ on:
   push:
   pull_request:
 
+# A newer push to the same branch cancels the run still going for the older one.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   backend:
     runs-on: ubuntu-latest
+    # The checks take under a minute. A hung step stops here instead of at six hours.
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: backend

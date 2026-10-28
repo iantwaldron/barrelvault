@@ -76,10 +76,9 @@ def test_objects_stay_readable_after_the_session_commits(database):
 
 def test_open_session_rolls_back(database):
     SQLModel.metadata.create_all(get_engine())
-    with pytest.raises(RuntimeError):
-        with open_session() as session:
-            session.add(User(name="Ada"))
-            raise RuntimeError("fail")
+    with pytest.raises(RuntimeError), open_session() as session:
+        session.add(User(name="Ada"))
+        raise RuntimeError("fail")
     with open_session() as session:
         assert session.exec(select(User)).all() == []
 
@@ -97,9 +96,8 @@ def test_get_session_commits(database):
 
 def test_foreign_keys_are_enforced(database):
     SQLModel.metadata.create_all(get_engine())
-    with pytest.raises(IntegrityError):
-        with open_session() as session:
-            session.add(Token(user_id=1, secret_hash="hash", expires_at=datetime.now(UTC)))
+    with pytest.raises(IntegrityError), open_session() as session:
+        session.add(Token(user_id=1, secret_hash="hash", expires_at=datetime.now(UTC)))
 
 
 def test_a_read_runs_inside_a_transaction(database):

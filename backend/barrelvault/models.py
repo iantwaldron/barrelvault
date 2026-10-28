@@ -58,17 +58,21 @@ class Token(SQLModel, table=True):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     expires_at: datetime
 
-    def generate_secret(self, session_length: int) -> str:
-        """Store a new secret hash and an expiry session_length seconds out.
+    @classmethod
+    def mint(cls, user_id: int, session_length: int) -> tuple["Token", str]:
+        """Build a session row with a new secret, expiring session_length seconds out.
 
-        Return the raw secret.
+        Return the row and the raw secret. Only the secret's hash is stored.
         """
         raw = secrets.token_hex(32)
         minted = datetime.now(UTC)
-        self.secret_hash = hashlib.sha256(raw.encode()).hexdigest()
-        self.created_at = minted
-        self.expires_at = minted + timedelta(seconds=session_length)
-        return raw
+        token = cls(
+            user_id=user_id,
+            secret_hash=hashlib.sha256(raw.encode()).hexdigest(),
+            created_at=minted,
+            expires_at=minted + timedelta(seconds=session_length),
+        )
+        return token, raw
 
 
 # Revision 0001 creates these with the same text. A change here needs a migration.

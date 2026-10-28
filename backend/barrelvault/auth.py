@@ -6,9 +6,10 @@ from datetime import UTC, datetime
 from pwdlib import PasswordHash
 from pwdlib.exceptions import UnknownHashError
 from sqlalchemy import delete, event
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session as OrmSession
 from sqlalchemy.orm import SessionTransaction
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from barrelvault.errors import Refused
 from barrelvault.models import Agent, Human, Token, User
@@ -81,8 +82,7 @@ def delete_session(session: Session, user_id: int) -> None:
 
 
 def _mint(session: Session, user_id: int, session_length: int) -> str:
-    token = Token(user_id=user_id)
-    raw = token.generate_secret(session_length)
+    token, raw = Token.mint(user_id, session_length)
     existing = session.exec(select(Token).where(Token.user_id == user_id)).one_or_none()
     if existing is not None:
         session.delete(existing)
@@ -104,8 +104,10 @@ def _delete_dead_sessions(session: OrmSession, transaction: SessionTransaction) 
     token_ids = session.info.pop(_DEAD_SESSIONS, None)
     if not token_ids:
         return
-    with session.get_bind().begin() as connection:
-        connection.execute(delete(Token).where(Token.id.in_(token_ids)))
+    bind = session.get_bind()
+    engine = bind if isinstance(bind, Engine) else bind.engine
+    with engine.begin() as connection:
+        connection.execute(delete(Token).where(col(Token.id).in_(token_ids)))
 
 
 def _agent_key_is_dead(agent: Agent) -> bool:

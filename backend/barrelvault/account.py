@@ -35,11 +35,8 @@ def create_account(session: Session, name: str, email: str, password: str) -> Hu
             raise Invalid(f"{field} is required")
     if is_set_up(session):
         raise Conflict("setup has already run")
-    user = User(name=name)
-    session.add(user)
-    session.flush()
     human = Human(
-        user_id=user.id,
+        user_id=_add_user(session, name),
         email=email,
         password_hash=hash_password(password),
     )
@@ -58,10 +55,7 @@ def add_agent(session: Session, actor: User, name: str) -> Agent:
         raise Invalid("name is required")
     if _name_taken(session, name):
         raise Conflict("name is taken")
-    user = User(name=name)
-    session.add(user)
-    session.flush()
-    agent = Agent(user_id=user.id, owner_id=human.user_id)
+    agent = Agent(user_id=_add_user(session, name), owner_id=human.user_id)
     session.add(agent)
     session.flush()
     return agent
@@ -78,7 +72,7 @@ def issue_key(session: Session, actor: User, agent_user_id: int, *, key_length: 
         raw = agent.generate_key(key_length)
         session.add(agent)
         session.flush()
-    return IssuedKey(raw, agent.key_expires_at)
+    return _issued(raw, agent)
 
 
 def roll_key(session: Session, actor: User, agent_user_id: int, *, key_length: int) -> IssuedKey:
@@ -93,7 +87,7 @@ def roll_key(session: Session, actor: User, agent_user_id: int, *, key_length: i
         delete_session(session, agent.user_id)
         session.add(agent)
         session.flush()
-    return IssuedKey(raw, agent.key_expires_at)
+    return _issued(raw, agent)
 
 
 def retire_agent(session: Session, actor: User, agent_user_id: int) -> None:
@@ -140,6 +134,19 @@ class _key_write:
 
     def __exit__(self, *_exc: object) -> None:
         self.session.info.pop(KEY_WRITE, None)
+
+
+def _add_user(session: Session, name: str) -> int:
+    user = User(name=name)
+    session.add(user)
+    session.flush()
+    assert user.id is not None, "the flush assigns the id"
+    return user.id
+
+
+def _issued(raw: str, agent: Agent) -> IssuedKey:
+    assert agent.key_expires_at is not None, "generate_key sets the expiry"
+    return IssuedKey(raw, agent.key_expires_at)
 
 
 def _acting_human(session: Session, actor: User) -> Human:

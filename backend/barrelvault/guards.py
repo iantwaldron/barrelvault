@@ -3,8 +3,9 @@
 Rules that hold for every write are constraints and triggers in models.py.
 """
 
-from sqlalchemy import event, inspect
+from sqlalchemy import event
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import instance_state
 
 from barrelvault.errors import Forbidden
 from barrelvault.models import Agent, Human
@@ -26,7 +27,7 @@ def _check_flush(session: Session, _flush_context: object, _instances: object) -
 
 
 def _check_agent_update(agent: Agent, key_write: object) -> None:
-    state = inspect(agent)
+    state = instance_state(agent)
     key_changed = any(
         state.attrs[name].history.has_changes() for name in ("key_hash", "key_expires_at")
     )

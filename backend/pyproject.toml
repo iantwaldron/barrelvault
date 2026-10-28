@@ -40,3 +40,12 @@ select = ["E", "F", "W", "I", "B", "UP", "SIM"]
 [tool.ruff.lint.isort]
 known-first-party = ["barrelvault", "tests"]
 
+[tool.mypy]
+python_version = "3.12"
+files = ["barrelvault"]
+# Alembic generates the revisions; review them, do not type-check them.
+exclude = ["barrelvault/migrations/versions/"]
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true

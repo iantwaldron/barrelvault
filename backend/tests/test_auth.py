@@ -165,11 +165,10 @@ def test_a_mint_without_an_expiry_is_refused(session, monkeypatch):
     secret = login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
     session.commit()
 
-    def generate_secret(self, _session_length: int) -> str:
-        self.secret_hash = "unfinished"
-        return "raw"
+    def mint(user_id: int, _session_length: int) -> tuple[Token, str]:
+        return Token(user_id=user_id, secret_hash="unfinished", expires_at=None), "raw"
 
-    monkeypatch.setattr(auth.Token, "generate_secret", generate_secret)
+    monkeypatch.setattr(auth.Token, "mint", mint)
     with pytest.raises(IntegrityError):
         login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
     session.rollback()
@@ -272,11 +271,10 @@ def test_dead_agent_key_stays_deleted_when_the_request_rolls_back(database):
             agent_id,
             key_expires_at=(datetime.now(UTC) - timedelta(seconds=1)).isoformat(),
         )
-    with pytest.raises(ServiceError):
-        with db.open_session() as db_session:
-            db_session.add(User(name="Unsaved"))
-            db_session.flush()
-            authenticate(db_session, agent_secret)
+    with pytest.raises(ServiceError), db.open_session() as db_session:
+        db_session.add(User(name="Unsaved"))
+        db_session.flush()
+        authenticate(db_session, agent_secret)
     with db.open_session() as db_session:
         assert db_session.exec(select(Token).where(Token.user_id == agent_id)).first() is None
         assert db_session.exec(select(User).where(User.name == "Unsaved")).first() is None
@@ -387,13 +385,10 @@ def test_overlapping_mints_leave_one_session(database):
     with db.open_session() as db_session:
         rows = list(db_session.exec(select(Token)).all())
         assert len(rows) == 1
-        accepted = []
-        for raw in found:
-            try:
-                accepted.append(authenticate(db_session, raw).id)
-            except ServiceError:
-                pass
-        assert accepted == [user_id]
+        # found is in commit order, so the later mint's secret is the live one.
+        assert authenticate(db_session, found[1]).id == user_id
+        with pytest.raises(ServiceError):
+            authenticate(db_session, found[0])
 
 
 def _issued_key(session: Session, secret: str) -> str:

@@ -105,7 +105,10 @@ def test_required_columns_reject_null(session):
     statements = [
         "INSERT INTO user (name) VALUES (NULL)",
         "INSERT INTO human (user_id, email, password_hash) VALUES (:user_id, NULL, 'hash')",
-        "INSERT INTO human (user_id, email, password_hash) VALUES (:user_id, 'ada@example.com', NULL)",
+        (
+            "INSERT INTO human (user_id, email, password_hash) "
+            "VALUES (:user_id, 'ada@example.com', NULL)"
+        ),
         "INSERT INTO agent (user_id, owner_id) VALUES (:user_id, NULL)",
         (
             "INSERT INTO token (user_id, secret_hash, created_at, expires_at) "
@@ -269,11 +272,10 @@ def test_expires_at_is_required(session):
         )
 
 
-def test_generate_secret_stores_the_hash_and_expiry(session):
+def test_mint_stores_the_hash_and_expiry(session):
     user = _user(session, "Ada")
-    token = Token(user_id=user.id)
     before = datetime.now(UTC)
-    raw = token.generate_secret(100)
+    token, raw = Token.mint(user.id, 100)
     after = datetime.now(UTC)
     session.add(token)
     session.commit()
@@ -296,11 +298,11 @@ def test_generate_secret_stores_the_hash_and_expiry(session):
     assert raw not in stored
 
 
-def test_generate_secret_replaces_the_previous_secret(session):
-    token = Token(user_id=_user(session, "Ada").id)
-    first = token.generate_secret(100)
-    second = token.generate_secret(100)
-    assert first != second
-    assert token.secret_hash == hashlib.sha256(second.encode()).hexdigest()
-    assert token.secret_hash != hashlib.sha256(first.encode()).hexdigest()
-    assert token.expires_at == token.created_at + timedelta(seconds=100)
+def test_each_mint_has_a_new_secret(session):
+    user_id = _user(session, "Ada").id
+    first, first_raw = Token.mint(user_id, 100)
+    second, second_raw = Token.mint(user_id, 100)
+    assert first_raw != second_raw
+    assert first.secret_hash != second.secret_hash
+    assert second.secret_hash == hashlib.sha256(second_raw.encode()).hexdigest()
+    assert second.expires_at == second.created_at + timedelta(seconds=100)

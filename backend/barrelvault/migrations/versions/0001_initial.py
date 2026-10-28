@@ -2,7 +2,7 @@
 
 Revision ID: 0001
 Revises: 
-Create Date: 2026-10-28 15:00:10.571085
+Create Date: 2026-10-28 15:10:21.639484
 
 """
 from typing import Sequence, Union
@@ -220,7 +220,7 @@ def upgrade() -> None:
     op.create_table('task',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('parent_id', sa.Integer(), nullable=True),
-    sa.Column('title', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
+    sa.Column('title', sa.String(collation='NOCASE'), nullable=False),
     sa.Column('notes', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('tags', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('status', sa.SmallInteger(), server_default='0', nullable=False),
@@ -242,6 +242,7 @@ def upgrade() -> None:
     )
     with op.batch_alter_table('task', schema=None) as batch_op:
         batch_op.create_index(batch_op.f('ix_task_owned_by'), ['owned_by'], unique=False)
+        batch_op.create_index('ix_task_owned_by_title', ['owned_by', 'title'], unique=False)
         batch_op.create_index(batch_op.f('ix_task_parent_id'), ['parent_id'], unique=False)
 
     op.create_table('token',
@@ -305,6 +306,7 @@ def downgrade() -> None:
     op.drop_table('token')
     with op.batch_alter_table('task', schema=None) as batch_op:
         batch_op.drop_index(batch_op.f('ix_task_parent_id'))
+        batch_op.drop_index('ix_task_owned_by_title')
         batch_op.drop_index(batch_op.f('ix_task_owned_by'))
 
     op.drop_table('task')

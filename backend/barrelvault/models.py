@@ -9,7 +9,7 @@ import hashlib
 import secrets
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import DDL, CheckConstraint, Index, SmallInteger, event
+from sqlalchemy import DDL, CheckConstraint, Index, SmallInteger, String, event
 from sqlmodel import Field, Session, SQLModel, select
 
 from barrelvault.history import HistoryBase, history
@@ -108,13 +108,15 @@ class Task(SQLModel, table=True):
         CheckConstraint(
             "trim(title, ' ' || char(9) || char(10) || char(13)) != ''", name="ck_task_title"
         ),
+        Index("ix_task_owned_by_title", "owned_by", "title"),
     )
 
     id: int | None = Field(default=None, primary_key=True)
     parent_id: int | None = Field(
         default=None, foreign_key="task.id", ondelete="CASCADE", index=True
     )
-    title: str
+    # The duplicate check compares title in the account with NOCASE, which folds A to Z.
+    title: str = Field(sa_type=String(collation="NOCASE"))
     notes: str | None = Field(default=None)
     tags: str | None = Field(default=None)
     status: int = Field(default=0, sa_type=SmallInteger, sa_column_kwargs={"server_default": "0"})

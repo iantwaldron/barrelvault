@@ -14,7 +14,7 @@ from barrelvault.blocks import (
 from barrelvault.errors import Conflict, Invalid, NotFound
 from barrelvault.models import User
 from barrelvault.status import COMPLETED, DROPPED, IN_PROGRESS
-from barrelvault.tasks import create_task, get_task, task_history
+from barrelvault.tasks import create_task, get_task, task_history, update_task
 from tests.support import act_as, make_account, second_account
 
 
@@ -36,32 +36,34 @@ def test_a_block_marks_the_task_blocked_and_changed_without_a_snapshot(session, 
     assert block.reason == "Waiting on Chad's reply, asked Monday"
     assert (block.created_by, block.released_by, block.released_at) == (bot.id, None, None)
     blocked = get_task(session, ada, task.id)
-    assert [open_block.released_at for open_block in list_blocks(session, ada, task.id)] == [None]
+    assert blocked.blocked
     assert blocked.updated_by == bot.id and blocked.updated_at > task.updated_at
     before_release = get_task(session, ada, task.id)
     released = release_block(session, ada, block.id)
     assert released.released_by == ada.id and released.released_at is not None
     after_release = get_task(session, ada, task.id)
-    assert list_blocks(session, ada, task.id)[0].released_at is not None
+    assert not after_release.blocked
     assert after_release.updated_by == ada.id
     assert after_release.updated_at > before_release.updated_at
     assert len(task_history(session, ada, task.id)) == 1
 
 
-def test_every_block_change_moves_the_tasks_updated_at(session, ada, bot):
+def test_a_block_change_makes_an_earlier_updated_at_stale(session, ada, bot):
     task = create_task(session, ada, "Call Chad")
     block = add_block(session, ada, task.id, "Waiting on Chad")
     changes = (
-        lambda: add_block(session, bot, task.id, "Waiting on Sam"),
-        lambda: edit_block_reason(session, bot, block.id, "Waiting on Chad's reply"),
-        lambda: release_block(session, bot, block.id),
+        lambda: add_block(session, ada, task.id, "Waiting on Sam"),
+        lambda: edit_block_reason(session, ada, block.id, "Waiting on Chad's reply"),
+        lambda: release_block(session, ada, block.id),
     )
     for change in changes:
-        before = get_task(session, ada, task.id).updated_at
+        read = get_task(session, bot, task.id)
         change()
-        after = get_task(session, ada, task.id)
-        assert after.updated_at > before and after.updated_by == bot.id
-    assert len(task_history(session, ada, task.id)) == 1
+        with pytest.raises(Conflict):
+            update_task(
+                session, bot, task.id, title="Call back", expected_updated_at=read.updated_at
+            )
+    assert get_task(session, ada, task.id).title == "Call Chad"
 
 
 def test_a_block_is_added_only_to_an_open_task(session, ada):

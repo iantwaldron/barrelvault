@@ -1,7 +1,8 @@
 """Account and agent writes. Each call takes the acting user; none reads a session."""
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 
 from sqlalchemy import or_, update
 from sqlmodel import Session, col, select
@@ -10,7 +11,11 @@ from barrelvault.auth import delete_session, hash_password, normalize_email
 from barrelvault.errors import Conflict, Forbidden, Invalid, NotFound
 from barrelvault.guards import KEY_WRITE, SETUP_WRITE
 from barrelvault.models import Agent, Block, Human, Task, TaskHistory, User
-from barrelvault.times import check_timezone
+from barrelvault.times import as_utc, check_timezone
+
+Kind = Literal["person", "agent"]
+PERSON: Kind = "person"
+AGENT: Kind = "agent"
 
 # Every column that names who did something. Reassign moves each one to the person.
 # owned_by is left out: it is always the person already.
@@ -24,6 +29,31 @@ _ACTOR_COLUMNS = (
 class IssuedKey(NamedTuple):
     key: str
     key_expires_at: datetime
+
+
+@dataclass(frozen=True)
+class UserRef:
+    """How a response names a user: never by id."""
+
+    name: str
+    kind: Kind
+
+
+@dataclass(frozen=True)
+class AccountView:
+    """The acting user, and the account they act in."""
+
+    name: str
+    kind: Kind
+    email: str
+    timezone: str
+
+
+@dataclass(frozen=True)
+class AgentView:
+    name: str
+    retired_at: datetime | None
+    key_expires_at: datetime | None
 
 
 def is_set_up(session: Session) -> bool:
@@ -143,6 +173,57 @@ class _key_write:
         self.session.info.pop(KEY_WRITE, None)
 
 
+def account_view(session: Session, actor: User) -> AccountView:
+    owner = account_of(session, actor)
+    kind = PERSON if owner.user_id == actor.id else AGENT
+    return AccountView(actor.name, kind, owner.email, owner.timezone)
+
+
+def set_timezone(session: Session, actor: User, timezone: str) -> AccountView:
+    """Change the account's timezone. Only the person changes it."""
+    human = _acting_human(session, actor, "only the person changes the timezone")
+    human.timezone = check_timezone(timezone)
+    session.add(human)
+    session.flush()
+    return account_view(session, actor)
+
+
+def list_agents(session: Session, actor: User) -> list[AgentView]:
+    """The person's agents, retired ones included, by name."""
+    human = _acting_human(session, actor)
+    agents = {agent.user_id: agent for agent in human.get_agents(session)}
+    users = session.exec(select(User).where(col(User.id).in_(agents)).order_by(col(User.name)))
+    views = []
+    for user in users:
+        agent = agents[_id(user)]
+        retired = as_utc(agent.retired_at) if agent.retired_at else None
+        expires = as_utc(agent.key_expires_at) if agent.key_expires_at else None
+        views.append(AgentView(user.name, retired, expires))
+    return views
+
+
+def agent_by_name(session: Session, actor: User, name: str) -> int:
+    """The user id of the person's agent with this name. Another account's is not found."""
+    human = _acting_human(session, actor)
+    found = session.exec(
+        select(Agent.user_id)
+        .join(User, col(User.id) == Agent.user_id)
+        .where(Agent.owner_id == human.user_id, User.name == name)
+    ).first()
+    if found is None:
+        raise NotFound("no such agent")
+    return found
+
+
+def user_refs(session: Session, user_ids: set[int]) -> dict[int, UserRef]:
+    """Name each user, as a person or an agent, for a response."""
+    if not user_ids:
+        return {}
+    agents = set(session.exec(select(Agent.user_id).where(col(Agent.user_id).in_(user_ids))))
+    users = session.exec(select(User).where(col(User.id).in_(user_ids)))
+    return {_id(user): UserRef(user.name, AGENT if user.id in agents else PERSON) for user in users}
+
+
 def actor_id(actor: User) -> int:
     """The acting user's id. A stored user always has one."""
     assert actor.id is not None, "a stored user has an id"
@@ -174,12 +255,19 @@ def _issued(raw: str, agent: Agent) -> IssuedKey:
     return IssuedKey(raw, agent.key_expires_at)
 
 
-def _acting_human(session: Session, actor: User) -> Human:
-    """Only a person creates or changes an agent. An acting agent is refused."""
+def _acting_human(
+    session: Session, actor: User, refusal: str = "only a person changes agents"
+) -> Human:
+    """The acting person. An acting agent is refused."""
     human = session.get(Human, actor.id)
     if human is None:
-        raise Forbidden("only a person changes agents")
+        raise Forbidden(refusal)
     return human
+
+
+def _id(user: User) -> int:
+    assert user.id is not None, "a stored user has an id"
+    return user.id
 
 
 def _agent(session: Session, human: Human, user_id: int) -> Agent:

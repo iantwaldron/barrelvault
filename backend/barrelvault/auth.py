@@ -90,6 +90,12 @@ def _human_by_email(session: Session, email: str) -> Human | None:
     return session.exec(select(Human).where(Human.email == address)).one_or_none()
 
 
+def session_expires_at(session: Session, secret: str) -> datetime:
+    """When a session just minted expires. The exchange returns it with the token."""
+    token = session.exec(select(Token).where(Token.secret_hash == _digest(secret))).one()
+    return as_utc(token.expires_at)
+
+
 def logout(session: Session, secret: str) -> None:
     if _blank(secret):
         return

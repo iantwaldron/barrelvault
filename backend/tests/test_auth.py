@@ -47,6 +47,13 @@ def test_login_and_exchange_store_the_actor_and_expiry(session):
     assert authenticate(session, agent_secret).id == agent.user_id
 
 
+def test_login_matches_the_email_in_any_case(session):
+    create_account(session, "Ada", "ada@example.com", "password-1")
+    for typed in ("ADA@example.com", "Ada@Example.Com", " ada@example.com "):
+        secret = login(session, typed, "password-1", session_length=SESSION_LENGTH)
+        assert authenticate(session, secret).name == "Ada"
+
+
 def test_wrong_email_and_wrong_password_are_the_same_failure(session, monkeypatch):
     create_account(session, "Ada", "ada@example.com", "password-1")
     calls = {"n": 0}
@@ -59,6 +66,10 @@ def test_wrong_email_and_wrong_password_are_the_same_failure(session, monkeypatc
     monkeypatch.setattr(auth._passwords, "verify", verify)
     with pytest.raises(ServiceError):
         login(session, "missing@example.com", "password-1", session_length=SESSION_LENGTH)
+    assert calls["n"] == 1
+    calls["n"] = 0
+    with pytest.raises(Refused):
+        login(session, "not an address", "password-1", session_length=SESSION_LENGTH)
     assert calls["n"] == 1
     calls["n"] = 0
     with pytest.raises(ServiceError):

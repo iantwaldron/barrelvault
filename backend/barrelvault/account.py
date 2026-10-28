@@ -6,7 +6,7 @@ from typing import NamedTuple
 from sqlalchemy import or_, text
 from sqlmodel import Session, col, select
 
-from barrelvault.auth import delete_session, hash_password
+from barrelvault.auth import delete_session, hash_password, normalize_email
 from barrelvault.errors import Conflict, Forbidden, Invalid, NotFound
 from barrelvault.guards import KEY_WRITE, SETUP_WRITE
 from barrelvault.models import Agent, Human, User
@@ -33,11 +33,12 @@ def create_account(session: Session, name: str, email: str, password: str) -> Hu
     for field, value in (("name", name), ("email", email), ("password", password)):
         if _blank(value):
             raise Invalid(f"{field} is required")
+    address = normalize_email(email)
     if is_set_up(session):
         raise Conflict("setup has already run")
     human = Human(
         user_id=_add_user(session, name),
-        email=email,
+        email=address,
         password_hash=hash_password(password),
     )
     session.add(human)

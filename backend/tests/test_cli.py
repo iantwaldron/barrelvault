@@ -121,6 +121,16 @@ def test_overlapping_setup_runs_create_one_human(database, monkeypatch, capsys):
         assert len(session.exec(select(User)).all()) == 1
 
 
+def test_a_malformed_email_is_refused(database, monkeypatch, capsys):
+    _prompt(monkeypatch, "Ada", "not-an-address", "password-1", "password-1")
+    with pytest.raises(SystemExit) as raised:
+        main(["setup"])
+    assert raised.value.code == 1
+    assert capsys.readouterr().err == "Setup was refused: email is not a valid address.\n"
+    with open_session(immediate=False) as session:
+        assert session.exec(select(User)).first() is None
+
+
 def test_the_password_is_not_read_from_the_environment(database, monkeypatch):
     monkeypatch.setenv("BARRELVAULT_PASSWORD", "from-env")
     _prompt(monkeypatch, "Ada", "ada@example.com", "typed-password", "typed-password")

@@ -88,6 +88,12 @@ def test_human_email_is_unique(session):
         _insert_human(session, other.id, "ada@example.com")
 
 
+def test_a_stored_email_is_lowercase(session):
+    user = _user(session, "Ada")
+    with pytest.raises(IntegrityError):
+        _insert_human(session, user.id, "Ada@example.com")
+
+
 def test_human_requires_a_user(session):
     with pytest.raises(IntegrityError):
         _insert_human(session, 1, "ada@example.com")

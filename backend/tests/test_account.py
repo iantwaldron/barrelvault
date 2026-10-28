@@ -44,6 +44,15 @@ def test_create_account_stores_one_human(session):
         create_account(session, "Bea", "bea@example.com", "password-2")
 
 
+def test_create_account_stores_the_normalized_email(session):
+    human = create_account(session, "Ada", "  Ada@Example.COM ", "password-1")
+    assert human.email == "ada@example.com"
+    for malformed in ("ada", "ada@", "@example.com", "ada@example", "a b@example.com"):
+        with pytest.raises(Invalid) as raised:
+            create_account(session, "Bea", malformed, "password-2")
+        assert raised.value.message == "email is not a valid address"
+
+
 def test_create_account_refuses_a_blank_field(session):
     with pytest.raises(ServiceError):
         create_account(session, " ", "ada@example.com", "password-1")

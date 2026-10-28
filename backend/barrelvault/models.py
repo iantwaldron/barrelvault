@@ -20,6 +20,9 @@ class User(SQLModel, table=True):
 
 
 class Human(SQLModel, table=True):
+    # auth.normalize_email writes every address. This holds the lowercase part of it.
+    __table_args__ = (CheckConstraint("email = lower(email)", name="ck_human_email_lowercase"),)
+
     user_id: int = Field(foreign_key="user.id", primary_key=True)
     email: str = Field(unique=True)
     password_hash: str

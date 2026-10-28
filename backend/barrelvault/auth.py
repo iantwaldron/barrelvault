@@ -3,6 +3,7 @@
 import hashlib
 from datetime import UTC, datetime
 
+from email_validator import EmailNotValidError, validate_email
 from pwdlib import PasswordHash
 from pwdlib.exceptions import UnknownHashError
 from sqlalchemy import delete, event
@@ -11,7 +12,7 @@ from sqlalchemy.orm import Session as OrmSession
 from sqlalchemy.orm import SessionTransaction
 from sqlmodel import Session, col, select
 
-from barrelvault.errors import Refused
+from barrelvault.errors import Invalid, Refused
 from barrelvault.models import Agent, Human, Token, User
 
 _passwords = PasswordHash.recommended()
@@ -24,8 +25,21 @@ def hash_password(password: str) -> str:
     return _passwords.hash(password)
 
 
+def normalize_email(email: str) -> str:
+    """The form an address is stored and matched in: checked, normalized, lowercased.
+
+    Only the syntax is checked, so this never reaches the network. A string that
+    is not an address raises Invalid.
+    """
+    try:
+        checked = validate_email(email.strip(), check_deliverability=False)
+    except EmailNotValidError:
+        raise Invalid("email is not a valid address") from None
+    return checked.normalized.lower()
+
+
 def login(session: Session, email: str, password: str, *, session_length: int) -> str:
-    human = session.exec(select(Human).where(Human.email == email)).one_or_none()
+    human = _human_by_email(session, email)
     stored = human.password_hash if human is not None else _DUMMY_PASSWORD_HASH
     try:
         password_matches = _passwords.verify(password, stored)
@@ -64,6 +78,15 @@ def authenticate(session: Session, secret: str) -> User:
         session.delete(token)
         raise Refused("refused")
     return user
+
+
+def _human_by_email(session: Session, email: str) -> Human | None:
+    """A malformed address matches no one, and the caller still checks a password."""
+    try:
+        address = normalize_email(email)
+    except Invalid:
+        return None
+    return session.exec(select(Human).where(Human.email == address)).one_or_none()
 
 
 def logout(session: Session, secret: str) -> None:

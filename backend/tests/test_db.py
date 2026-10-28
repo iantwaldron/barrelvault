@@ -179,7 +179,11 @@ def test_migrations_build_the_model_triggers_and_checks(database, engine):
                 name
                 for kind, _table, sql in rows
                 if kind == "table"
-                for name in ("ck_agent_key_pair", "ck_agent_retired_without_key")
+                for name in (
+                    "ck_agent_key_pair",
+                    "ck_agent_retired_without_key",
+                    "ck_human_email_lowercase",
+                )
                 if name in sql
             },
         }
@@ -187,7 +191,7 @@ def test_migrations_build_the_model_triggers_and_checks(database, engine):
     with get_engine().connect() as migrated, engine.connect() as modeled:
         assert schema(migrated) == schema(modeled)
         assert len(schema(migrated)["triggers"]) == 7
-        assert len(schema(migrated)["checks"]) == 2
+        assert len(schema(migrated)["checks"]) == 3
 
 
 def test_migrations_downgrade_to_an_empty_database(database):

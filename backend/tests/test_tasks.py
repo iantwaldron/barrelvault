@@ -317,3 +317,18 @@ def test_updated_at_moves_on_every_change_even_inside_one_millisecond(session, a
     first = update_task(session, ada, task.id, title="One")
     second = update_task(session, ada, task.id, title="Two")
     assert task.updated_at < first.updated_at < second.updated_at
+
+
+def test_history_keeps_write_order_when_the_clock_steps_back(session, ada, monkeypatch):
+    task = create_task(session, ada, "First")
+    earlier = iter([DUE - timedelta(hours=1), DUE - timedelta(hours=2)])
+    monkeypatch.setattr("barrelvault.history.now", lambda: next(earlier))
+    update_task(session, ada, task.id, title="Second")
+    update_task(session, ada, task.id, title="Third")
+    entries = task_history(session, ada, task.id)
+    assert [entry.state["title"] for entry in entries] == ["First", "Second", "Third"]
+    assert entries[2].created_at < entries[1].created_at
+    # The recorder compares with the newest snapshot by id, so an unchanged write adds none.
+    assert (
+        len(task_history(session, ada, update_task(session, ada, task.id, title="Third").id)) == 3
+    )

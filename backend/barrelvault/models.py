@@ -87,7 +87,9 @@ class Token(SQLModel, table=True):
 
 class TaskHistory(HistoryBase, table=True):
     __tablename__ = "task_history"
-    __table_args__ = (Index("ix_task_history_task_id_created_at", "task_id", "created_at"),)
+    # A task's snapshots are read in the order they were written, which is id order, so
+    # a clock that steps backward cannot reorder them. created_at says when.
+    __table_args__ = (Index("ix_task_history_task_id_id", "task_id", "id"),)
 
     task_id: int = Field(foreign_key="task.id", ondelete="CASCADE")
 

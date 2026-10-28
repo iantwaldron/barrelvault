@@ -166,14 +166,10 @@ def delete_task(session: Session, actor: User, task_id: int) -> None:
 
 
 def task_history(session: Session, actor: User, task_id: int) -> list[HistoryEntry]:
-    """The task's snapshots, ordered by created_at then id."""
+    """The task's snapshots in the order they were written, which is id order."""
     owner = account_of(session, actor)
     task_in_account(session, owner.user_id, task_id)
-    query = (
-        select(TaskHistory)
-        .where(TaskHistory.task_id == task_id)
-        .order_by(col(TaskHistory.created_at), col(TaskHistory.id))
-    )
+    query = select(TaskHistory).where(TaskHistory.task_id == task_id).order_by(col(TaskHistory.id))
     return [
         HistoryEntry(row.user_id, as_utc(row.created_at), row.state) for row in session.exec(query)
     ]

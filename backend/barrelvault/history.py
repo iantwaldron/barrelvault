@@ -83,7 +83,7 @@ def history(history_model: type[HistoryBase]) -> Callable[[Model], Model]:
             last = connection.execute(
                 select(target_table.c.state)
                 .where(target_table.c[subject_key] == row.id)
-                .order_by(target_table.c.created_at.desc(), target_table.c.id.desc())
+                .order_by(target_table.c.id.desc())
                 .limit(1)
             ).scalar()
             if last != snapshot(row):

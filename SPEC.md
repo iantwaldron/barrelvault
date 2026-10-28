@@ -55,7 +55,7 @@ The account is the human and every agent whose `owner_id` is that human's user i
 
 A setup command creates the first human. The command is `python -m barrelvault.cli setup`. It applies the migrations, then checks the user table. Any row means setup has already run: the command prints a message and exits. Otherwise it prompts for the name, the email, the timezone, and the password twice. The timezone must be a name Python's `zoneinfo` knows. The email must be a valid address. Its syntax is checked with `email-validator`, without a network lookup, and it is stored in that library's normalized form, lowercased. Login normalizes the email it is given the same way before matching, so `Ada@Example.com` and `ada@example.com` are one login. A malformed email at login is the same failure as a wrong email. The two passwords must match. The password is read with echo off. It is not a command argument and it is not read from the environment. It is hashed with `pwdlib` and Argon2. The plaintext is not stored. The command writes one User and one Human. A second setup run is refused. In v0.1 setup is the only path that creates a Human, and no session can create one. A path that adds another human is out of scope for v0.1 and will be specified on its own. Tests that need a second account insert it directly.
 
-`timezone` is a profile attribute of the person, and only the person changes it. An agent works in its owner's timezone. Every datetime is stored in UTC. A datetime sent with an offset is converted to UTC. One sent without an offset is read in the account's timezone, and `zoneinfo` settles daylight-saving gaps and overlaps. A response carries UTC, and a read of the account returns the timezone so the client can show local time.
+`timezone` is a profile attribute of the person, and only the person changes it. An agent works in its owner's timezone. Every datetime is stored in UTC. Stored times are whole milliseconds, and `updated_at` moves at least one millisecond with each change. A datetime sent with an offset is converted to UTC. One sent without an offset is read in the account's timezone, and `zoneinfo` settles daylight-saving gaps and overlaps. A response carries UTC, and a read of the account returns the timezone so the client can show local time.
 
 ### Agent
 
@@ -218,11 +218,13 @@ A block row is the record of the wait and of its release. A history row keeps it
 | state      | json     | mutable fields at that moment |
 | task_id    | int      | FK to Task, ON DELETE CASCADE |
 
-Index `(task_id, created_at)`.
+Index `(task_id, id)`.
 
-For a task, `state` holds `parent_id`, `title`, `notes`, `tags`, `status`, `estimate_minutes`, and `due_at`. `due_at` is an ISO 8601 UTC string, `tags` is the stored form, and an empty `notes` is `""`. `parent_id` in `state` is a plain number, so deleting some other task leaves old snapshots alone. The recorder leaves out `id`, `created_by`, `created_at`, `updated_at`, `updated_by`, and `owned_by`. `created_at` on a history row is when the system saved that snapshot. `user_id` on that row is the editor of that snapshot. The recorder takes it from the task's `updated_by`, so it reads no session. History reads are ordered by `created_at`, then `id`.
+For a task, `state` holds `parent_id`, `title`, `notes`, `tags`, `status`, `estimate_minutes`, and `due_at`. `due_at` is an ISO 8601 UTC string, `tags` is the stored form, and an empty `notes` is `""`. `parent_id` in `state` is a plain number, so deleting some other task leaves old snapshots alone. The recorder leaves out `id`, `created_by`, `created_at`, `updated_at`, `updated_by`, and `owned_by`. `created_at` on a history row is when the system saved that snapshot. `user_id` on that row is the editor of that snapshot. The recorder takes it from the task's `updated_by`, so it reads no session. History reads are ordered by `id`, the order the snapshots were written, so a clock that steps backward cannot reorder them. `created_at` records when.
 
 Create writes the first snapshot. An update writes another only when one of those fields changed. The snapshot is the state being saved. The previous row is the prior state, and a diff is those two documents. After a successful commit, the newest row matches the live task.
+
+The recorder sees ORM writes. A bulk statement or raw SQL that changes a recorded field writes no snapshot, which is why such writes are not made.
 
 The history insert and the task write are one transaction. A rollback or a failed commit drops both, and the stored task stays as it was.
 

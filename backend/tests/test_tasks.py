@@ -315,7 +315,8 @@ def test_completing_a_parent_leaves_its_children_open(session, ada):
     update_task(session, ada, parent.id, status=COMPLETED)
     remaining = get_task(session, ada, child.id)
     assert remaining.status == TODO and not remaining.effectively_dropped
-    assert [task.id for task in task_tree(session, ada, open_only=True)] == [child.id]
+    opened = task_tree(session, ada, open_only=True)
+    assert [(task.id, task.matched) for task in opened] == [(parent.id, False), (child.id, True)]
 
 
 def test_a_drop_records_its_reason_in_notes(session, ada):
@@ -564,3 +565,28 @@ def test_an_agent_cannot_reach_another_accounts_tasks(session, ada, bot):
         with pytest.raises(NotFound):
             call()
     assert task_tree(session, bot) == []
+
+
+def test_a_filtered_tree_keeps_each_matchs_ancestors(session, ada):
+    root = create_task(session, ada, "Deal", status=COMPLETED)
+    middle = create_task(session, ada, "Legal", parent_id=root.id, status=COMPLETED)
+    leaf = create_task(session, ada, "Sign", parent_id=middle.id, tags="deal:chad")
+    other = create_task(session, ada, "Unrelated", tags="home")
+    create_task(session, ada, "Closed branch", parent_id=root.id, status=COMPLETED)
+
+    def shape(tasks) -> list[tuple[int, bool]]:
+        return [(task.id, task.matched) for task in tasks]
+
+    by_tag = task_tree(session, ada, tags="deal:chad")
+    assert shape(by_tag) == [(root.id, False), (middle.id, False), (leaf.id, True)]
+    opened = task_tree(session, ada, open_only=True)
+    assert shape(opened) == [
+        (root.id, False),
+        (middle.id, False),
+        (leaf.id, True),
+        (other.id, True),
+    ]
+    # A subtree read keeps ancestors only down from the parent asked for.
+    assert shape(task_tree(session, ada, middle.id, open_only=True)) == [(leaf.id, True)]
+    assert all(task.matched for task in task_tree(session, ada))
+    assert all(task.matched for task in list_tasks(session, ada, tags="home"))

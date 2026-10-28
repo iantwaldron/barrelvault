@@ -56,14 +56,18 @@ class Tree:
         """True when the task or any ancestor is dropped."""
         return task_id in self._dropped
 
+    def ancestors(self, task_id: int) -> list[int]:
+        """The ids above a task, nearest first, ending at a root."""
+        found: list[int] = []
+        node = self._rows[task_id].parent_id if task_id in self._rows else None
+        while node is not None and node in self._rows and node not in found:
+            found.append(node)
+            node = self._rows[node].parent_id
+        return found
+
     def would_cycle(self, task_id: int, parent_id: int) -> bool:
         """True when nesting the task under parent_id would make it its own ancestor."""
-        node: int | None = parent_id
-        while node is not None:
-            if node == task_id:
-                return True
-            node = self._rows[node].parent_id if node in self._rows else None
-        return False
+        return parent_id == task_id or task_id in self.ancestors(parent_id)
 
     def _walk(self, parent_id: int | None) -> Iterator[TaskRow]:
         stack = list(reversed(self._children.get(parent_id, ())))

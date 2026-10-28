@@ -45,6 +45,8 @@ class TaskSummary:
     updated_at: datetime
     effectively_dropped: bool
     blocked: bool
+    # False for an ancestor a filtered tree includes only so the match keeps its parents.
+    matched: bool
 
 
 @dataclass(frozen=True)
@@ -135,7 +137,9 @@ def list_tasks(
     tree = load_tree(session, owner.user_id)
     _check_parent_in(tree, parent_id)
     rows = tree.children(parent_id)
-    return _summaries(session, owner.user_id, tree, rows, tags=tags, open_only=open_only)
+    return _summaries(
+        session, owner.user_id, tree, rows, tags=tags, open_only=open_only, ancestors=False
+    )
 
 
 def task_tree(
@@ -146,12 +150,18 @@ def task_tree(
     tags: str | None = None,
     open_only: bool = False,
 ) -> list[TaskSummary]:
-    """Every task under a parent, or in the account for None, parents before children."""
+    """Every task under a parent, or in the account for None, parents before children.
+
+    A filtered tree keeps each match's ancestors under the parent, marked unmatched, so
+    no task comes back without the tasks above it.
+    """
     owner = account_of(session, actor)
     tree = load_tree(session, owner.user_id)
     _check_parent_in(tree, parent_id)
     rows = tree.descendants(parent_id)
-    return _summaries(session, owner.user_id, tree, rows, tags=tags, open_only=open_only)
+    return _summaries(
+        session, owner.user_id, tree, rows, tags=tags, open_only=open_only, ancestors=True
+    )
 
 
 def update_task(
@@ -471,14 +481,23 @@ def _summaries(
     *,
     tags: str | None,
     open_only: bool,
+    ancestors: bool,
 ) -> list[TaskSummary]:
+    def matches(row: TaskRow) -> bool:
+        if open_only and (row.status not in OPEN or tree.is_effectively_dropped(row.id)):
+            return False
+        return not tags or has_tags(row.tags, tags)
+
+    matched = {row.id for row in rows if matches(row)}
+    included = set(matched)
+    if ancestors:
+        in_rows = {row.id for row in rows}
+        for task_id in matched:
+            included.update(node for node in tree.ancestors(task_id) if node in in_rows)
     blocked = open_block_task_ids(session, account_id)
     summaries = []
     for row in rows:
-        dropped = tree.is_effectively_dropped(row.id)
-        if open_only and (row.status not in OPEN or dropped):
-            continue
-        if tags and not has_tags(row.tags, tags):
+        if row.id not in included:
             continue
         summaries.append(
             TaskSummary(
@@ -493,8 +512,9 @@ def _summaries(
                 created_at=row.created_at,
                 updated_by=row.updated_by,
                 updated_at=row.updated_at,
-                effectively_dropped=dropped,
+                effectively_dropped=tree.is_effectively_dropped(row.id),
                 blocked=row.id in blocked,
+                matched=row.id in matched,
             )
         )
     return summaries

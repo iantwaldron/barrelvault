@@ -66,3 +66,10 @@ def test_the_cycle_check_refuses_the_task_itself_and_a_descendant():
     assert tree.would_cycle(1, 3)
     assert not tree.would_cycle(3, 4)
     assert not tree.would_cycle(4, 1)
+
+
+def test_ancestors_run_nearest_first_to_the_root():
+    tree = Tree([_row(1, None), _row(2, 1), _row(3, 2), _row(4, None)])
+    assert tree.ancestors(3) == [2, 1]
+    assert tree.ancestors(1) == []
+    assert tree.ancestors(99) == []

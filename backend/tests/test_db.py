@@ -1,6 +1,7 @@
 import sqlite3
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -20,7 +21,7 @@ from barrelvault.db import (
     migration_config,
     open_session,
 )
-from barrelvault.models import Human, User
+from barrelvault.models import Token, User
 
 
 def _clear_engine():
@@ -105,7 +106,7 @@ def test_foreign_keys_are_enforced(database):
     SQLModel.metadata.create_all(get_engine())
     with pytest.raises(IntegrityError):
         with open_session() as session:
-            session.add(Human(user_id=1, email="ada@example.com", password_hash="hash"))
+            session.add(Token(user_id=1, secret_hash="hash", expires_at=datetime.now(UTC)))
 
 
 def test_a_read_runs_inside_a_transaction(database):

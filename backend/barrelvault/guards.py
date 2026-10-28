@@ -10,6 +10,8 @@ from barrelvault.models import Agent, Human, Token, User
 KEY_WRITE = "agent_key_write"
 # Set in session.info by authenticate: the acting user's id and "human" or "agent".
 ACTOR = "actor"
+# Set in session.info by setup while it writes the first human. No other write adds one.
+SETUP_WRITE = "setup_write"
 
 _ACCOUNT_ROWS = (User, Human, Agent)
 
@@ -22,11 +24,11 @@ def _check_flush(session: Session, _flush_context: object, _instances: object) -
         if isinstance(obj, Token):
             _check_new_token(obj)
         elif isinstance(obj, Human):
-            if actor is not None:
+            # Setup writes a new User beside it, so this human has no other profile.
+            if not session.info.get(SETUP_WRITE):
                 raise ServiceError("refused")
-            _check_new_profile(session, obj, Agent)
         elif isinstance(obj, Agent):
-            _check_new_profile(session, obj, Human)
+            _check_new_profile(session, obj)
             _check_owner(session, obj, actor)
             _check_key_pair(obj)
     for obj in session.dirty:
@@ -47,21 +49,16 @@ def _check_actor(actor: tuple[int, str] | None, obj: object) -> None:
         raise ServiceError("refused")
 
 
-def _check_new_profile(session: Session, profile: Human | Agent, other: type) -> None:
-    """A user keeps the one profile it has. The stored row counts until it is deleted."""
-    if any(isinstance(obj, other) and obj.user_id == profile.user_id for obj in session.new):
-        raise ServiceError("refused")
-    if _stored(session, other, profile.user_id):
+def _check_new_profile(session: Session, agent: Agent) -> None:
+    """A human user stays human. The stored row counts until it is deleted."""
+    if _stored(session, Human, agent.user_id):
         raise ServiceError("refused")
 
 
 def _check_owner(session: Session, agent: Agent, actor: tuple[int, str] | None) -> None:
     if actor is not None and agent.owner_id != actor[0]:
         raise ServiceError("refused")
-    pending = any(
-        isinstance(obj, Human) and obj.user_id == agent.owner_id for obj in session.new
-    )
-    if not pending and not _stored(session, Human, agent.owner_id):
+    if not _stored(session, Human, agent.owner_id):
         raise ServiceError("refused")
 
 

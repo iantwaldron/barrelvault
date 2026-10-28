@@ -7,7 +7,7 @@ from sqlalchemy import text
 from sqlmodel import Session, select
 
 from barrelvault.auth import ServiceError, authenticate, delete_session, hash_password
-from barrelvault.guards import KEY_WRITE
+from barrelvault.guards import KEY_WRITE, SETUP_WRITE
 from barrelvault.models import Agent, Human, User
 
 _REFERENCES = (
@@ -42,7 +42,11 @@ def create_account(session: Session, name: str, email: str, password: str) -> Hu
         password_hash=hash_password(password),
     )
     session.add(human)
-    session.flush()
+    session.info[SETUP_WRITE] = True
+    try:
+        session.flush()
+    finally:
+        session.info.pop(SETUP_WRITE, None)
     return human
 
 

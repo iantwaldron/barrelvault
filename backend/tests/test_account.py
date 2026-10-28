@@ -8,6 +8,7 @@ from sqlmodel import Session, SQLModel, create_engine, select
 
 from barrelvault import auth
 from barrelvault.auth import ServiceError, authenticate, exchange_key, login
+from barrelvault.guards import SETUP_WRITE
 from barrelvault.models import Agent, Human, Token, User
 from barrelvault.account import (
     IssuedKey,
@@ -106,6 +107,22 @@ def test_a_session_cannot_create_a_human(session):
             session.flush()
         session.rollback()
     assert session.exec(select(Human)).one().user_id == human.user_id
+
+
+def test_only_setup_adds_a_human(session):
+    create_account(session, "Ada", "ada@example.com", "password-1")
+    session.commit()
+    plain = Session(session.get_bind())
+    user = User(name="Bea")
+    plain.add(user)
+    plain.flush()
+    plain.add(Human(user_id=user.id, email="bea@example.com", password_hash="hash"))
+    with pytest.raises(ServiceError):
+        plain.flush()
+    plain.rollback()
+    plain.close()
+    assert len(session.exec(select(Human)).all()) == 1
+    assert SETUP_WRITE not in session.info
 
 
 def test_add_stores_an_empty_key(session):
@@ -303,13 +320,13 @@ def test_an_unauthenticated_session_needs_a_human_owner(session):
     with pytest.raises(ServiceError):
         session.flush()
     session.rollback()
-    session.add(User(id=50, name="Bea"))
-    session.add(User(id=51, name="Bea bot"))
+    bea_id, _bea_secret = _second_account(session)
+    bot = User(name="Bea bot")
+    session.add(bot)
     session.flush()
-    session.add(Human(user_id=50, email="bea@example.com", password_hash="hash"))
-    session.add(Agent(user_id=51, owner_id=50))
+    session.add(Agent(user_id=bot.id, owner_id=bea_id))
     session.flush()
-    assert session.get(Agent, 51).owner_id == 50
+    assert session.get(Agent, bot.id).owner_id == bea_id
 
 
 def test_profile_changes_are_refused(session):
@@ -346,14 +363,6 @@ def test_profile_changes_are_refused(session):
     assert session.get(Agent, human.user_id) is None
     assert session.get(Agent, agent.user_id) is not None
     assert session.get(Human, agent.user_id) is None
-
-
-def test_a_new_user_gets_one_profile(session):
-    session.add(User(id=1, name="Ada"))
-    session.add(Human(user_id=1, email="ada@example.com", password_hash="hash"))
-    session.add(Agent(user_id=1, owner_id=1))
-    with pytest.raises(ServiceError):
-        session.flush()
 
 
 def test_agent_session_cannot_write(session):

@@ -38,12 +38,21 @@ def _user(session: Session, name: str) -> User:
 
 
 def _human(session: Session, name: str = "Ada", email: str = "ada@example.com") -> Human:
+    """Insert a human directly. Only setup adds one through the ORM."""
     user = _user(session, name)
-    human = Human(user_id=user.id, email=email, password_hash="hash")
-    session.add(human)
+    _insert_human(session, user.id, email)
     session.commit()
-    session.refresh(human)
-    return human
+    return session.get(Human, user.id)
+
+
+def _insert_human(session: Session, user_id: int, email: str) -> None:
+    session.connection().execute(
+        text(
+            "INSERT INTO human (user_id, email, password_hash) "
+            "VALUES (:user_id, :email, 'hash')"
+        ),
+        {"user_id": user_id, "email": email},
+    )
 
 
 def _agent(session: Session, owner: Human, name: str, **fields) -> Agent:
@@ -65,15 +74,13 @@ def test_user_name_is_unique(session):
 def test_human_email_is_unique(session):
     _human(session)
     other = _user(session, "Other")
-    session.add(Human(user_id=other.id, email="ada@example.com", password_hash="hash"))
     with pytest.raises(IntegrityError):
-        session.commit()
+        _insert_human(session, other.id, "ada@example.com")
 
 
 def test_human_requires_a_user(session):
-    session.add(Human(user_id=1, email="ada@example.com", password_hash="hash"))
     with pytest.raises(IntegrityError):
-        session.commit()
+        _insert_human(session, 1, "ada@example.com")
 
 
 def test_agent_user_must_exist(session):

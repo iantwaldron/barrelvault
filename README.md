@@ -24,6 +24,13 @@ env/bin/pip-compile --generate-hashes --allow-unsafe --strip-extras \
 
 `barrelvault setup` and `python -m barrelvault.cli setup` run the same command.
 
+To bring an existing virtualenv in line with the lock, sync it. `pip install` only adds packages, so one installed by hand stays until a sync removes it:
+
+```sh
+env/bin/pip-sync requirements.dev.lock
+env/bin/pip install --no-deps -e .
+```
+
 ## Environment
 
 | name                         | required | purpose                                                                                                |

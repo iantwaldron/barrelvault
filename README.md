@@ -2,6 +2,19 @@
 
 A task management system where a person and their agents collaborate. The product draft is [SPEC.md](SPEC.md).
 
+## Install
+
+From `backend/`, with the virtualenv at `backend/env`:
+
+```sh
+python3 -m venv env
+env/bin/pip install -r requirements.dev.txt
+env/bin/pip install --no-deps -e .
+env/bin/barrelvault setup
+```
+
+`barrelvault setup` and `python -m barrelvault.cli setup` run the same command.
+
 ## Environment
 
 | name                         | required | purpose                                                                                                |

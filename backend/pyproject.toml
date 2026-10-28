@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "barrelvault"
+version = "0.1.0"
+description = "A task management system where a person and their agents collaborate."
+requires-python = ">=3.12"
+# requirements.txt holds the pins, so they are written once.
+dynamic = ["dependencies"]
+
+[project.scripts]
+barrelvault = "barrelvault.cli:main"
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+[tool.setuptools.packages.find]
+include = ["barrelvault*"]
+
+[tool.setuptools.package-data]
+barrelvault = ["migrations/*.py", "migrations/*.mako", "migrations/versions/*.py"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
+[tool.coverage.run]
+source = ["barrelvault"]
+patch = ["subprocess"]

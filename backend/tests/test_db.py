@@ -186,7 +186,7 @@ def test_migrations_build_the_model_triggers_and_checks(database, engine):
 
     with get_engine().connect() as migrated, engine.connect() as modeled:
         assert schema(migrated) == schema(modeled)
-        assert len(schema(migrated)["triggers"]) == 5
+        assert len(schema(migrated)["triggers"]) == 7
         assert len(schema(migrated)["checks"]) == 2
 
 

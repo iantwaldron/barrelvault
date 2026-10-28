@@ -3,8 +3,8 @@
 from datetime import UTC, datetime
 from typing import NamedTuple
 
-from sqlalchemy import text
-from sqlmodel import Session, select
+from sqlalchemy import or_, text
+from sqlmodel import Session, col, select
 
 from barrelvault.auth import delete_session, hash_password
 from barrelvault.errors import Conflict, Forbidden, Invalid, NotFound
@@ -53,7 +53,7 @@ def add_agent(session: Session, actor: User, name: str) -> Agent:
     human = _acting_human(session, actor)
     if _blank(name):
         raise Invalid("name is required")
-    if _name_taken(session, name):
+    if _name_taken(session, human, name):
         raise Conflict("name is taken")
     agent = Agent(user_id=_add_user(session, name), owner_id=human.user_id)
     session.add(agent)
@@ -217,8 +217,14 @@ def _table_names(session: Session) -> set[str]:
     return {str(row[0]) for row in rows}
 
 
-def _name_taken(session: Session, name: str) -> bool:
-    return session.exec(select(User).where(User.name == name)).first() is not None
+def _name_taken(session: Session, human: Human, name: str) -> bool:
+    """True when the person or one of their agents has this name, in any case."""
+    in_account = or_(
+        col(User.id) == human.user_id,
+        col(User.id).in_(select(Agent.user_id).where(Agent.owner_id == human.user_id)),
+    )
+    same_name = col(User.name).collate("NOCASE") == name
+    return session.exec(select(User).where(in_account, same_name)).first() is not None
 
 
 def _blank(value: str | None) -> bool:

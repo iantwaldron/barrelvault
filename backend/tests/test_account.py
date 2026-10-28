@@ -99,6 +99,19 @@ def test_add_stores_an_empty_key(session):
         add_agent(session, act_as(session, secret), "Ada")
 
 
+def test_an_agent_name_is_unique_only_in_its_account(session):
+    _human, secret = make_account(session)
+    _bea_id, bea_secret = second_account(session)
+    ada = act_as(session, secret)
+    add_agent(session, ada, "Bot")
+    for taken in ("bot", "BOT", "ada"):
+        with pytest.raises(Conflict):
+            add_agent(session, ada, taken)
+    bea = act_as(session, bea_secret)
+    assert add_agent(session, bea, "Bot").owner_id == bea.id
+    assert add_agent(session, bea, "Ada").owner_id == bea.id
+
+
 def test_issue_and_roll_set_the_key_expiry(session):
     _human, secret = make_account(session)
     agent = add_agent(session, act_as(session, secret), "Bot")

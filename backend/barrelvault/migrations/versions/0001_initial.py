@@ -2,14 +2,15 @@
 
 Revision ID: 0001
 Revises: 
-Create Date: 2026-10-27 19:17:57.622300
+Create Date: 2026-10-27 19:48:14.067066
 
 """
 from typing import Sequence, Union
 
+from alembic import op
 import sqlalchemy as sa
 import sqlmodel
-from alembic import op
+
 
 # A copy, not an import: a later change to models.TRIGGERS needs its own revision.
 TRIGGERS = (
@@ -25,6 +26,27 @@ BEGIN SELECT RAISE(ABORT, 'a user has one profile'); END""",
     """CREATE TRIGGER human_user_is_not_agent BEFORE INSERT ON human
 WHEN EXISTS (SELECT 1 FROM agent WHERE user_id = NEW.user_id)
 BEGIN SELECT RAISE(ABORT, 'a user has one profile'); END""",
+    """CREATE TRIGGER agent_name_is_free BEFORE INSERT ON agent
+WHEN EXISTS (
+  SELECT 1 FROM user AS mine, user AS other
+  WHERE mine.id = NEW.user_id
+    AND other.name = mine.name COLLATE NOCASE
+    AND (other.id = NEW.owner_id
+      OR other.id IN (SELECT user_id FROM agent WHERE owner_id = NEW.owner_id))
+)
+BEGIN SELECT RAISE(ABORT, 'name is taken in this account'); END""",
+    """CREATE TRIGGER user_name_is_free BEFORE UPDATE OF name ON user
+WHEN NEW.name IS NOT OLD.name AND EXISTS (
+  SELECT 1 FROM user AS other
+  WHERE other.id != NEW.id
+    AND other.name = NEW.name COLLATE NOCASE
+    AND (other.id = COALESCE((SELECT owner_id FROM agent WHERE user_id = NEW.id), NEW.id)
+      OR other.id IN (
+        SELECT user_id FROM agent
+        WHERE owner_id = COALESCE((SELECT owner_id FROM agent WHERE user_id = NEW.id), NEW.id)
+      ))
+)
+BEGIN SELECT RAISE(ABORT, 'name is taken in this account'); END""",
     """CREATE TRIGGER token_is_fixed BEFORE UPDATE OF user_id, secret_hash, expires_at ON token
 WHEN NEW.user_id IS NOT OLD.user_id
   OR NEW.secret_hash IS NOT OLD.secret_hash
@@ -46,9 +68,11 @@ def upgrade() -> None:
     op.create_table('user',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('name', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-    sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('name')
+    sa.PrimaryKeyConstraint('id')
     )
+    with op.batch_alter_table('user', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_user_name'), ['name'], unique=False)
+
     op.create_table('agent',
     sa.Column('user_id', sa.Integer(), nullable=False),
     sa.Column('owner_id', sa.Integer(), nullable=False),
@@ -98,5 +122,8 @@ def downgrade() -> None:
         batch_op.drop_index(batch_op.f('ix_agent_owner_id'))
 
     op.drop_table('agent')
+    with op.batch_alter_table('user', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_user_name'))
+
     op.drop_table('user')
     # ### end Alembic commands ###

@@ -42,11 +42,43 @@ def _agent(session: Session, owner: Human, name: str, **fields) -> Agent:
     return agent
 
 
-def test_user_name_is_unique(session):
-    _user(session, "Ada")
-    session.add(User(name="Ada"))
-    with pytest.raises(IntegrityError):
-        session.commit()
+def test_an_agent_name_is_unique_in_its_account(session):
+    ada = _human(session)
+    bea = _human(session, name="Bea", email="bea@example.com")
+    _agent(session, ada, "Bot")
+    for taken in ("bot", "BOT", "ada"):
+        user = _user(session, taken)
+        with pytest.raises(IntegrityError):
+            session.connection().execute(
+                text("INSERT INTO agent (user_id, owner_id) VALUES (:user_id, :owner_id)"),
+                {"user_id": user.id, "owner_id": ada.user_id},
+            )
+        session.rollback()
+    # Another account may use the same name, and a plain user row is not checked.
+    assert _agent(session, bea, "Bot").owner_id == bea.user_id
+    assert _user(session, "Bot").name == "Bot"
+
+
+def test_a_rename_keeps_names_unique_in_the_account(session):
+    ada = _human(session)
+    bea = _human(session, name="Bea", email="bea@example.com")
+    bot = _agent(session, ada, "Bot")
+    other = _agent(session, ada, "Other")
+    _agent(session, bea, "Helper")
+
+    def rename(user_id: int, name: str) -> None:
+        session.connection().execute(
+            text("UPDATE user SET name = :name WHERE id = :id"), {"id": user_id, "name": name}
+        )
+
+    for user_id, taken in ((other.user_id, "BOT"), (other.user_id, "Ada"), (ada.user_id, "bot")):
+        with pytest.raises(IntegrityError):
+            rename(user_id, taken)
+        session.rollback()
+    rename(other.user_id, "Helper")
+    rename(bot.user_id, "bot")
+    session.commit()
+    assert session.get(User, other.user_id).name == "Helper"
 
 
 def test_human_email_is_unique(session):

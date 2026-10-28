@@ -15,7 +15,8 @@ from sqlmodel import Field, Session, SQLModel, select
 
 class User(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
-    name: str = Field(unique=True)
+    # Unique within the account, without regard to case. The name_is_free triggers hold it.
+    name: str = Field(index=True)
 
 
 class Human(SQLModel, table=True):
@@ -89,6 +90,29 @@ BEGIN SELECT RAISE(ABORT, 'a user has one profile'); END""",
     """CREATE TRIGGER human_user_is_not_agent BEFORE INSERT ON human
 WHEN EXISTS (SELECT 1 FROM agent WHERE user_id = NEW.user_id)
 BEGIN SELECT RAISE(ABORT, 'a user has one profile'); END""",
+    # An agent's name differs, in any case, from its owner's and from the owner's other agents.
+    """CREATE TRIGGER agent_name_is_free BEFORE INSERT ON agent
+WHEN EXISTS (
+  SELECT 1 FROM user AS mine, user AS other
+  WHERE mine.id = NEW.user_id
+    AND other.name = mine.name COLLATE NOCASE
+    AND (other.id = NEW.owner_id
+      OR other.id IN (SELECT user_id FROM agent WHERE owner_id = NEW.owner_id))
+)
+BEGIN SELECT RAISE(ABORT, 'name is taken in this account'); END""",
+    # A rename holds the same rule. The account is the owner, or the user itself for a person.
+    """CREATE TRIGGER user_name_is_free BEFORE UPDATE OF name ON user
+WHEN NEW.name IS NOT OLD.name AND EXISTS (
+  SELECT 1 FROM user AS other
+  WHERE other.id != NEW.id
+    AND other.name = NEW.name COLLATE NOCASE
+    AND (other.id = COALESCE((SELECT owner_id FROM agent WHERE user_id = NEW.id), NEW.id)
+      OR other.id IN (
+        SELECT user_id FROM agent
+        WHERE owner_id = COALESCE((SELECT owner_id FROM agent WHERE user_id = NEW.id), NEW.id)
+      ))
+)
+BEGIN SELECT RAISE(ABORT, 'name is taken in this account'); END""",
     """CREATE TRIGGER token_is_fixed BEFORE UPDATE OF user_id, secret_hash, expires_at ON token
 WHEN NEW.user_id IS NOT OLD.user_id
   OR NEW.secret_hash IS NOT OLD.secret_hash

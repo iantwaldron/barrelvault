@@ -12,7 +12,7 @@ A task management system where a person and their agents collaborate. The produc
 
 ## Database
 
-Each connection turns foreign keys on, uses WAL, and sets a busy timeout of 5000 milliseconds so a second user of the file waits while the first is writing. Every transaction starts with an explicit `BEGIN`, reads included. Setup starts its transaction with `BEGIN IMMEDIATE`, so two runs cannot both find an empty user table.
+Each connection turns foreign keys on, uses WAL, and sets a busy timeout of 5000 milliseconds so a second user of the file waits while the first is writing. Every transaction starts with an explicit `BEGIN`, reads included. A session starts with `BEGIN IMMEDIATE` unless it only reads, so a second writer waits out the busy timeout instead of failing, and two setup runs cannot both find an empty user table.
 
 ## Migrations
 

@@ -1,6 +1,7 @@
 import sqlite3
 import subprocess
 import sys
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -96,6 +97,41 @@ def test_a_read_runs_inside_a_transaction(database):
     with open_session() as session:
         session.execute(text("SELECT 1"))
         assert session.connection().connection.dbapi_connection.in_transaction
+
+
+def test_sessions_that_read_then_write_take_turns(database):
+    SQLModel.metadata.create_all(get_engine())
+    first_read = threading.Event()
+    second_read = threading.Event()
+    errors: list[BaseException] = []
+
+    def first() -> None:
+        with open_session() as session:
+            session.exec(select(User)).all()
+            first_read.set()
+            # A deferred second session reads now. An immediate one is still
+            # waiting for this lock, so the wait times out and this one writes.
+            second_read.wait(timeout=0.5)
+            session.add(User(name="Ada"))
+
+    def second() -> None:
+        first_read.wait(timeout=5)
+        try:
+            with open_session() as session:
+                session.exec(select(User)).all()
+                second_read.set()
+                session.add(User(name="Bea"))
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=first), threading.Thread(target=second)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+    assert errors == []
+    with open_session(immediate=False) as session:
+        assert {user.name for user in session.exec(select(User))} == {"Ada", "Bea"}
 
 
 def test_an_immediate_session_holds_the_write_lock(database):

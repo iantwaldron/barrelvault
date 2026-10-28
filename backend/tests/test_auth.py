@@ -350,14 +350,14 @@ def test_overlapping_mints_leave_one_session(database):
     with db.open_session() as db_session:
         human = create_account(db_session, "Ada", "ada@example.com", "password-1")
         user_id = human.user_id
-    barrier = threading.Barrier(2)
+    start = threading.Event()
     found: list[str] = []
     errors: list[BaseException] = []
 
     def mint() -> None:
+        start.wait(timeout=5)
         try:
             with db.open_session() as db_session:
-                barrier.wait(timeout=5)
                 found.append(auth._mint(db_session, user_id, SESSION_LENGTH))
         except BaseException as exc:
             errors.append(exc)
@@ -365,9 +365,12 @@ def test_overlapping_mints_leave_one_session(database):
     threads = [threading.Thread(target=mint), threading.Thread(target=mint)]
     for thread in threads:
         thread.start()
+    start.set()
     for thread in threads:
-        thread.join()
-    assert len(found) + len(errors) == 2
+        thread.join(timeout=10)
+    # The second mint waits for the first's lock, then replaces its row.
+    assert errors == []
+    assert len(found) == 2
     with db.open_session() as db_session:
         rows = list(db_session.exec(select(Token)).all())
         assert len(rows) == 1

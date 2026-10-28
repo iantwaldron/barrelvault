@@ -28,7 +28,7 @@ def is_set_up(session: Session) -> bool:
 
 
 def create_account(session: Session, name: str, email: str, password: str) -> Human:
-    """Create the first human. Setup is the only caller, in an immediate session."""
+    """Create the first human. Setup is the only caller."""
     if _blank(name) or _blank(email) or _blank(password):
         raise ServiceError("refused")
     if is_set_up(session):

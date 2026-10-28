@@ -19,7 +19,7 @@ def main(argv: list[str] | None = None) -> None:
 
 def setup() -> None:
     apply_migrations()
-    with open_session() as session:
+    with open_session(immediate=False) as session:
         exists = is_set_up(session)
     if exists:
         _exit("Barrelvault is already set up.")
@@ -30,7 +30,7 @@ def setup() -> None:
     if password != confirmed:
         _exit("Passwords do not match.")
     try:
-        with open_session(immediate=True) as session:
+        with open_session() as session:
             create_account(session, name, email, password)
     except ServiceError:
         _exit("Setup was refused.")

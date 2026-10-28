@@ -69,11 +69,13 @@ def _use_wal(cursor: sqlite3.Cursor) -> None:
 
 
 @contextmanager
-def open_session(*, immediate: bool = False) -> Iterator[Session]:
+def open_session(*, immediate: bool = True) -> Iterator[Session]:
     """Open a database session, commit on success, and roll back on failure.
 
-    An immediate session holds the write lock from its first statement, so a
-    check it reads cannot change before its write commits.
+    A session is immediate unless the caller only reads. It takes the write
+    lock from its first statement, so a second writer waits out the busy
+    timeout instead of failing, and a check it reads cannot change before its
+    write commits. A read-only session passes immediate=False.
     """
     session = Session(get_engine())
     if immediate:

@@ -49,8 +49,11 @@ The account is the human and every agent whose `owner_id` is that human's user i
 | user_id       | int  | pk, FK to User                        |
 | email         | text | unique; login matches this            |
 | password_hash | text | Argon2 hash of the person's password  |
+| timezone      | text | IANA name, such as `America/Chicago`  |
 
-A setup command creates the first human. The command is `python -m barrelvault.cli setup`. It applies the migrations, then checks the user table. Any row means setup has already run: the command prints a message and exits. Otherwise it prompts for the name, the email, and the password twice. The two passwords must match. The password is read with echo off. It is not a command argument and it is not read from the environment. It is hashed with `pwdlib` and Argon2. The plaintext is not stored. The command writes one User and one Human. A second setup run is refused. In v0.1 setup is the only path that creates a Human, and no session can create one. A path that adds another human is out of scope for v0.1 and will be specified on its own. Tests that need a second account insert it directly.
+A setup command creates the first human. The command is `python -m barrelvault.cli setup`. It applies the migrations, then checks the user table. Any row means setup has already run: the command prints a message and exits. Otherwise it prompts for the name, the email, the timezone, and the password twice. The timezone must be a name Python's `zoneinfo` knows. The two passwords must match. The password is read with echo off. It is not a command argument and it is not read from the environment. It is hashed with `pwdlib` and Argon2. The plaintext is not stored. The command writes one User and one Human. A second setup run is refused. In v0.1 setup is the only path that creates a Human, and no session can create one. A path that adds another human is out of scope for v0.1 and will be specified on its own. Tests that need a second account insert it directly.
+
+`timezone` is a profile attribute of the person, and only the person changes it. An agent works in its owner's timezone. Every datetime is stored in UTC. A datetime sent with an offset is converted to UTC. One sent without an offset is read in the account's timezone, and `zoneinfo` settles daylight-saving gaps and overlaps. A response carries UTC, and a read of the account returns the timezone so the client can show local time.
 
 ### Agent
 
@@ -105,7 +108,7 @@ Tests cover a login with the person's password, a wrong password, an exchange wi
 
 ### Task
 
-A task may contain tasks, with the same fields at every depth. An empty `parent_id` is a root, and a root may have no children. The default read is one level: roots, or the direct children of a parent. `tree` returns every task under that parent.
+A task may contain tasks, with the same fields at every depth. An empty `parent_id` is a root, and a root need not have children. The default read is one level: roots, or the direct children of a parent. `tree` returns every task under that parent. In v0.1 every list, `tree` included, is ordered by `created_at`, then `id`. A later priority or grouping order replaces it.
 
 | column           | type     | notes                                                     |
 | ---------------- | -------- | --------------------------------------------------------- |
@@ -123,7 +126,11 @@ A task may contain tasks, with the same fields at every depth. An empty `parent_
 | updated_by       | int      | FK to User, the last editor                               |
 | owned_by         | int      | FK to User, the human who owns the task                   |
 
-`owned_by` is set once at create and stays put. The person stores their own user id. An agent stores its `owner_id`. The service rejects a write whose `owned_by` is not the human's user id. Tests cover a create by the person, a create by an agent, an `owned_by` set to an agent id, an `owned_by` set to an id that is not the human, and an update that tries to change `owned_by`. `created_by` and `created_at` stay put for the life of the row. `created_by` is the acting user's id. Do not default it to a string. A Human profile on `created_by` means the person created the task. An Agent profile means an agent created it. `updated_at` and `updated_by` change when the task row changes, and when a block on that task changes. `updated_by` is the acting user. On create it is the same user as `created_by`. Adding or releasing a block does not write a history snapshot.
+Every task and block read and write is limited to the acting user's account: `owned_by` must be the person's user id, or the acting agent's `owner_id`. A task in another account is treated as a missing id. Within the account, the person and every agent have the same control over tasks and blocks, deletes included. A task or block call names its acting user, and the service does not read a session. The API and MCP take the acting user from the session they validated. Another surface, such as a CLI, supplies it its own way. Tests create a second account and refuse a read, an update, a delete, a nest under its task, and a block add, edit, or release on its task.
+
+The person or an agent can change `title`, `notes`, `tags`, `status`, `estimate_minutes`, `due_at`, and `parent_id`. Any status change is allowed, including a completed task back to todo. `title` is required and is not blank after trimming. `status` is `0`, `1`, or `2`. `estimate_minutes` is from 0 through 32767.
+
+`owned_by` is set once at create and stays put. The person stores their own user id. An agent stores its `owner_id`. The service rejects a write whose `owned_by` is not the human's user id. Tests cover a create by the person, a create by an agent, an `owned_by` set to an agent id, an `owned_by` set to an id that is not the human, and an update that tries to change `owned_by`. `created_by` and `created_at` stay put for the life of the row. `created_by` is the acting user's id. Do not default it to a string. A Human profile on `created_by` means the person created the task. An Agent profile means an agent created it. `updated_at` and `updated_by` change when the task row changes, and when a block on that task changes. `updated_by` is the acting user. On create it is the same user as `created_by`, and `updated_at` equals `created_at`. Adding or releasing a block does not write a history snapshot.
 
 How long a task has been open is a model function, not a stored column. For a completed task it is `updated_at` minus `created_at`. For any other status it is the current UTC time minus `created_at`. A later edit of a completed task moves `updated_at`, and the span moves with it. Block intervals are not subtracted.
 
@@ -131,7 +138,7 @@ Every nullable text column reads through `value or ""`. `None` becomes `""` befo
 
 Completing a parent leaves its children open. A finished task stays until it is deleted.
 
-Nesting and detaching change `parent_id`. Setting it to another task nests this task under that parent. A new task may be created already nested. The cycle check walks the ancestor chain and rejects the task itself, a descendant, or a missing id. Clearing `parent_id` detaches the task and makes it a root. Children stay under the moved task, and no rows are deleted.
+Nesting and detaching change `parent_id`. Setting it to another task nests this task under that parent. A new task may be created already nested. The cycle check walks the ancestor chain and rejects the task itself, a descendant, a missing id, or a task in another account. Clearing `parent_id` detaches the task and makes it a root. Children stay under the moved task, and no rows are deleted.
 
 Deleting a task removes that row. The `parent_id` cascade deletes the subtree with it, along with those tasks' blocks and history. There is no tombstone.
 
@@ -141,9 +148,11 @@ Tags are a filter on the task, stored in `tags`. A tag is one token and contains
 
 Tag reads, and the rest of tag CRUD, go through these helpers.
 
-On save, a helper takes the submitted string and returns the stored form: tokens separated by single spaces, trimmed, with empty tokens and duplicates removed. Order is kept. No tokens stores `""`. The tokens live on the task, so a later multi-user store has no shared tag catalog.
+On save, a helper takes the submitted string and returns the stored form: tokens lowercased, separated by single spaces, trimmed, with empty tokens and duplicates removed. Order is kept, by first appearance. `Deal:Chad deal:chad` stores `deal:chad`. No tokens stores `""`. The tokens live on the task, so a later multi-user store has no shared tag catalog.
 
-On read, the tag helper takes that coerced string and returns its tokens. `""` returns no tokens. The task screen and a history snapshot both display tags by passing their value to that helper. The list check uses those same tokens.
+On read, the tag helper takes that coerced string and returns its tokens. `""` returns no tokens. The task screen and a history snapshot both display tags by passing their value to that helper.
+
+A list can filter by tags. The filter's tags pass through the save helper, and a task matches when every one of them is a whole token in its `tags`. `deal` does not match `deal:chad`.
 
 Changing `tags` is a change to the task row, so it bumps `updated_at` and writes a history snapshot.
 
@@ -151,9 +160,9 @@ A repo, pull request, or any other URL is written in the notes. There is no link
 
 ### Block
 
-A block is a row on a task. The task is blocked while it has at least one open block. A block is open while `released_at` is empty. Several blocks may be open, and each is released on its own. Releasing a block sets `released_at` and `released_by` to the acting user and the current UTC time. The row stays. The task's status stays as it is.
+A block is a row on a task. The task is blocked while it has at least one open block. A block is open while `released_at` is empty. Several blocks may be open, and each is released on its own. Releasing a block sets `released_by` to the acting user and `released_at` to the current UTC time. A released block cannot be released again or reopened. The row stays. The task's status stays as it is.
 
-`reason` is one line naming what the task is waiting on and who was asked. A due date can pass while a block is open. An open block is the record an agent uses to bump the user, or to draft a follow-up to the person being waited on.
+`reason` is one line naming what the task is waiting on and who was asked. It is required, is not blank after trimming, and can be edited. A block is deleted only with its task. A due date can pass while a block is open. An open block is the record an agent uses to bump the user, or to draft a follow-up to the person being waited on.
 
 | column      | type     | notes                              |
 | ----------- | -------- | ---------------------------------- |
@@ -181,7 +190,7 @@ A block row is the record of the wait and of its release. A history row keeps it
 
 Index `(task_id, created_at)`.
 
-For a task, `state` holds `parent_id`, `title`, `notes`, `tags`, `status`, `estimate_minutes`, and `due_at`. `parent_id` in `state` is a plain number, so deleting some other task leaves old snapshots alone. The recorder leaves out `id`, `created_by`, `created_at`, `updated_at`, `updated_by`, and `owned_by`. `created_at` on a history row is when the system saved that snapshot. `user_id` on that row is the editor of that snapshot.
+For a task, `state` holds `parent_id`, `title`, `notes`, `tags`, `status`, `estimate_minutes`, and `due_at`. `due_at` is an ISO 8601 UTC string, `tags` is the stored form, and an empty `notes` is `""`. `parent_id` in `state` is a plain number, so deleting some other task leaves old snapshots alone. The recorder leaves out `id`, `created_by`, `created_at`, `updated_at`, `updated_by`, and `owned_by`. `created_at` on a history row is when the system saved that snapshot. `user_id` on that row is the editor of that snapshot. History reads are ordered by `created_at`, then `id`.
 
 Create writes the first snapshot. An update writes another only when one of those fields changed. The snapshot is the state being saved. The previous row is the prior state, and a diff is those two documents. After a successful commit, the newest row matches the live task.
 
@@ -189,4 +198,4 @@ The history insert and the task write are one transaction. A rollback or a faile
 
 ## Out of scope for v0.1
 
-Multi-user, public hosting, notifications, recurring tasks, mobile app, desktop wrapper. A `source` field for where a task came from, such as email or a call. Prioritization as a whole, including `value_tier`, rank, and a stored top-three. Goal and comments. Time entries, including timers and an hours report.
+Multi-user, public hosting, notifications, recurring tasks, mobile app, desktop wrapper. A `source` field for where a task came from, such as email or a call. Prioritization as a whole, including `value_tier`, rank, and a stored top-three. Goal and comments. Time entries, including timers and an hours report. Per-agent permission control.

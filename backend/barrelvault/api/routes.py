@@ -7,7 +7,6 @@ from fastapi.responses import JSONResponse
 from sqlmodel import Session
 
 from barrelvault.account import (
-    UserRef,
     add_agent,
     agent_by_name,
     delete_agent,
@@ -16,7 +15,6 @@ from barrelvault.account import (
     reassign_agent,
     retire_agent,
     roll_key,
-    user_refs,
 )
 from barrelvault.api.deps import Actor, AppSettings, DbSession, Warnings
 from barrelvault.api.schemas import (
@@ -32,14 +30,12 @@ from barrelvault.api.schemas import (
     TaskEntryOut,
     TaskOut,
     TaskPatch,
-    UserOut,
 )
-from barrelvault.blocks import BlockView, add_block, edit_block_reason, list_blocks, release_block
+from barrelvault.api.shapes import blocks_out, entries_out, history_out, task_out
+from barrelvault.blocks import add_block, edit_block_reason, list_blocks, release_block
 from barrelvault.models import User
 from barrelvault.tasks import (
     UNSET,
-    TaskDetail,
-    TaskSummary,
     delete_task,
     drop_task,
     get_task,
@@ -118,28 +114,6 @@ def delete_agent_route(name: str, session: DbSession, actor: Actor) -> Response:
 # Tasks.
 
 
-def _named(session: Session, user_ids: set[int]) -> dict[int, UserOut]:
-    refs: dict[int, UserRef] = user_refs(session, user_ids)
-    return {user_id: UserOut(name=ref.name, kind=ref.kind) for user_id, ref in refs.items()}
-
-
-def _task_out(session: Session, task: TaskDetail) -> TaskOut:
-    names = _named(session, {task.created_by, task.updated_by})
-    fields = {k: v for k, v in vars(task).items() if k != "owned_by"}
-    fields["created_by"], fields["updated_by"] = names[task.created_by], names[task.updated_by]
-    return TaskOut(**fields)
-
-
-def _entries_out(session: Session, tasks: list[TaskSummary]) -> list[TaskEntryOut]:
-    names = _named(session, {t.created_by for t in tasks} | {t.updated_by for t in tasks})
-    out = []
-    for task in tasks:
-        fields = dict(vars(task))
-        fields["created_by"], fields["updated_by"] = names[task.created_by], names[task.updated_by]
-        out.append(TaskEntryOut(**fields))
-    return out
-
-
 @router.get("/tasks")
 def list_tasks_route(
     session: DbSession,
@@ -149,7 +123,7 @@ def list_tasks_route(
     open: bool = False,
 ) -> list[TaskEntryOut]:
     tasks = list_tasks(session, actor, parent, tags=tags, open_only=open)
-    return _entries_out(session, tasks)
+    return entries_out(session, tasks)
 
 
 @router.get("/tasks/tree")
@@ -160,12 +134,12 @@ def task_tree_route(
     tags: str | None = None,
     open: bool = False,
 ) -> list[TaskEntryOut]:
-    return _entries_out(session, task_tree(session, actor, parent, tags=tags, open_only=open))
+    return entries_out(session, task_tree(session, actor, parent, tags=tags, open_only=open))
 
 
 @router.get("/tasks/{task_id}")
 def get_task_route(task_id: int, session: DbSession, actor: Actor) -> TaskOut:
-    return _task_out(session, get_task(session, actor, task_id))
+    return task_out(session, get_task(session, actor, task_id))
 
 
 @router.post("/tasks", status_code=status.HTTP_201_CREATED)
@@ -176,7 +150,7 @@ def create_task_route(
     task = warnings.create(
         session, actor, body.title, allow_duplicate=body.allow_duplicate, **fields
     )
-    return _task_out(session, task)
+    return task_out(session, task)
 
 
 @router.patch("/tasks/{task_id}")
@@ -197,7 +171,7 @@ def update_task_route(task_id: int, body: TaskPatch, session: DbSession, actor: 
         release_blocks=body.release_blocks,
         expected_updated_at=body.expected_updated_at,
     )
-    return _task_out(session, task)
+    return task_out(session, task)
 
 
 @router.post("/tasks/{task_id}/drop")
@@ -210,7 +184,7 @@ def drop_task_route(task_id: int, body: DropIn, session: DbSession, actor: Actor
         release_blocks=body.release_blocks,
         expected_updated_at=body.expected_updated_at,
     )
-    return _task_out(session, task)
+    return task_out(session, task)
 
 
 @router.delete("/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -220,41 +194,27 @@ def delete_task_route(task_id: int, session: DbSession, actor: Actor) -> None:
 
 @router.get("/tasks/{task_id}/history")
 def history_route(task_id: int, session: DbSession, actor: Actor) -> list[HistoryOut]:
-    entries = task_history(session, actor, task_id)
-    names = _named(session, {entry.user_id for entry in entries})
-    return [
-        HistoryOut(editor=names[entry.user_id], created_at=entry.created_at, state=entry.state)
-        for entry in entries
-    ]
+    return history_out(session, task_history(session, actor, task_id))
 
 
 # Blocks.
 
 
-def _block_out(session: Session, block: BlockView) -> BlockOut:
-    ids = {block.created_by} | ({block.released_by} if block.released_by else set())
-    names = _named(session, ids)
-    fields = dict(vars(block))
-    fields["created_by"] = names[block.created_by]
-    fields["released_by"] = names[block.released_by] if block.released_by else None
-    return BlockOut(**fields)
-
-
 @router.get("/tasks/{task_id}/blocks")
 def list_blocks_route(task_id: int, session: DbSession, actor: Actor) -> list[BlockOut]:
-    return [_block_out(session, block) for block in list_blocks(session, actor, task_id)]
+    return blocks_out(session, list_blocks(session, actor, task_id))
 
 
 @router.post("/tasks/{task_id}/blocks", status_code=status.HTTP_201_CREATED)
 def add_block_route(task_id: int, body: BlockIn, session: DbSession, actor: Actor) -> BlockOut:
-    return _block_out(session, add_block(session, actor, task_id, body.reason))
+    return blocks_out(session, [add_block(session, actor, task_id, body.reason)])[0]
 
 
 @router.patch("/blocks/{block_id}")
 def edit_block_route(block_id: int, body: BlockIn, session: DbSession, actor: Actor) -> BlockOut:
-    return _block_out(session, edit_block_reason(session, actor, block_id, body.reason))
+    return blocks_out(session, [edit_block_reason(session, actor, block_id, body.reason)])[0]
 
 
 @router.post("/blocks/{block_id}/release")
 def release_block_route(block_id: int, session: DbSession, actor: Actor) -> BlockOut:
-    return _block_out(session, release_block(session, actor, block_id))
+    return blocks_out(session, [release_block(session, actor, block_id)])[0]

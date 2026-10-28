@@ -405,3 +405,21 @@ def test_a_datetime_with_an_offset_comes_back_in_utc(ada):
     sent = (datetime(2026, 11, 6, 17, tzinfo=UTC) - timedelta(hours=0)).isoformat()
     task = ada.post("/api/tasks", json={"title": "Offset", "due_at": sent}).json()
     assert task["due_at"] == "2026-11-06T17:00:00.000Z"
+
+
+def test_the_apps_lifespan_serves_mcp_beside_the_api(app, ada):
+    ada.post("/api/agents", json={"name": "Bot"})
+    key = ada.post("/api/agents/Bot/key", json={}).json()["key"]
+    token = _client(app).post("/api/exchange", json={"key": key}).json()["token"]
+    # Entering the client runs the app's lifespan, which starts the MCP session manager.
+    with TestClient(app, base_url="https://testserver") as served:
+        response = served.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+            headers={
+                "Authorization": f"Bearer {token}",
+                "accept": "application/json, text/event-stream",
+            },
+        )
+    assert response.status_code == 200
+    assert "create_task" in {tool["name"] for tool in response.json()["result"]["tools"]}

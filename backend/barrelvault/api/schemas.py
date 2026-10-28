@@ -170,3 +170,15 @@ class BlockOut(BaseModel):
     created_at: UtcTime
     released_by: UserOut | None
     released_at: UtcTime | None
+
+
+class TaskWithBlocksOut(TaskOut):
+    """A task as the MCP reads it: with its blocks, since an agent nearly always needs them."""
+
+    blocks: list[BlockOut]
+
+
+class FollowUpOut(BlockOut):
+    """An open block to follow up on, with the title of the task it holds."""
+
+    task_title: str

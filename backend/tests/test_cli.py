@@ -17,8 +17,6 @@ from barrelvault.models import Human, User
 def database(monkeypatch, tmp_path):
     path = tmp_path / "barrelvault.db"
     monkeypatch.setenv("BARRELVAULT_DB", str(path))
-    monkeypatch.delenv("BARRELVAULT_SESSION_LENGTH", raising=False)
-    monkeypatch.delenv("BARRELVAULT_KEY_LENGTH", raising=False)
     monkeypatch.delenv("BARRELVAULT_PASSWORD", raising=False)
     _clear_engine()
     yield path

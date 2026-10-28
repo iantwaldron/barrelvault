@@ -63,25 +63,25 @@ def add_agent(session: Session, actor: User, name: str) -> Agent:
     return agent
 
 
-def issue_key(session: Session, actor: User, agent_user_id: int) -> IssuedKey:
+def issue_key(session: Session, actor: User, agent_user_id: int, *, key_length: int) -> IssuedKey:
     human = _acting_human(session, actor)
     agent = _agent(session, human, agent_user_id)
     if agent.retired_at is not None or agent.key_hash is not None:
         raise ServiceError("refused")
     with _key_write(session, "issue"):
-        raw = agent.generate_key()
+        raw = agent.generate_key(key_length)
         session.add(agent)
         session.flush()
     return IssuedKey(raw, agent.key_expires_at)
 
 
-def roll_key(session: Session, actor: User, agent_user_id: int) -> IssuedKey:
+def roll_key(session: Session, actor: User, agent_user_id: int, *, key_length: int) -> IssuedKey:
     human = _acting_human(session, actor)
     agent = _agent(session, human, agent_user_id)
     if agent.retired_at is not None or agent.key_hash is None or agent.key_expires_at is None:
         raise ServiceError("refused")
     with _key_write(session, "roll"):
-        raw = agent.generate_key()
+        raw = agent.generate_key(key_length)
         delete_session(session, agent.user_id)
         session.add(agent)
         session.flush()

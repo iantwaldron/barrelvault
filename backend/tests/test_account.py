@@ -20,7 +20,10 @@ from barrelvault.account import (
     retire_agent,
     roll_key,
 )
-from barrelvault.settings import SettingsError
+from barrelvault.settings import DEFAULT_KEY_LENGTH, DEFAULT_SESSION_LENGTH
+
+KEY_LENGTH = DEFAULT_KEY_LENGTH
+SESSION_LENGTH = DEFAULT_SESSION_LENGTH
 
 
 @pytest.fixture
@@ -49,7 +52,7 @@ def _actor(session: Session, secret: str) -> User:
 
 def _account(session: Session) -> tuple[Human, str]:
     human = create_account(session, "Ada", "ada@example.com", "password-1")
-    secret = login(session, "ada@example.com", "password-1")
+    secret = login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
     return human, secret
 
 
@@ -66,12 +69,12 @@ def _second_account(session: Session) -> tuple[int, str]:
         ),
         {"user_id": user_id, "password_hash": auth.hash_password("password-2")},
     )
-    return user_id, login(session, "bea@example.com", "password-2")
+    return user_id, login(session, "bea@example.com", "password-2", session_length=SESSION_LENGTH)
 
 
 def _live_agent(session: Session, secret: str, name: str = "Bot") -> tuple[Agent, IssuedKey]:
     agent = add_agent(session, _actor(session, secret), name)
-    issued = issue_key(session, _actor(session, secret), agent.user_id)
+    issued = issue_key(session, _actor(session, secret), agent.user_id, key_length=KEY_LENGTH)
     return agent, issued
 
 
@@ -101,7 +104,7 @@ def test_create_account_refuses_a_blank_field(session):
 def test_a_logged_in_session_cannot_create_a_human(session):
     human, secret = _account(session)
     _agent, issued = _live_agent(session, secret)
-    agent_secret = exchange_key(session, issued.key)
+    agent_secret = exchange_key(session, issued.key, session_length=SESSION_LENGTH)
     session.commit()
     for actor in (secret, agent_secret):
         _actor(session, actor)
@@ -143,12 +146,11 @@ def test_add_stores_an_empty_key(session):
         add_agent(session, _actor(session, secret), "Ada")
 
 
-def test_issue_and_roll_set_the_key_expiry(session, monkeypatch):
-    monkeypatch.setenv("BARRELVAULT_KEY_LENGTH", "100")
+def test_issue_and_roll_set_the_key_expiry(session):
     _human, secret = _account(session)
     agent = add_agent(session, _actor(session, secret), "Bot")
     before = datetime.now(UTC)
-    issued = issue_key(session, _actor(session, secret), agent.user_id)
+    issued = issue_key(session, _actor(session, secret), agent.user_id, key_length=100)
     after = datetime.now(UTC)
     session.refresh(agent)
     assert len(bytes.fromhex(issued.key)) == 32
@@ -157,50 +159,31 @@ def test_issue_and_roll_set_the_key_expiry(session, monkeypatch):
     assert before + timedelta(seconds=100) <= agent.key_expires_at
     assert agent.key_expires_at <= after + timedelta(seconds=100)
     with pytest.raises(ServiceError):
-        issue_key(session, _actor(session, secret), agent.user_id)
-    rolled = roll_key(session, _actor(session, secret), agent.user_id)
+        issue_key(session, _actor(session, secret), agent.user_id, key_length=KEY_LENGTH)
+    rolled = roll_key(session, _actor(session, secret), agent.user_id, key_length=KEY_LENGTH)
     session.refresh(agent)
     assert rolled.key != issued.key
     assert agent.key_hash != issued.key
     with pytest.raises(ServiceError):
-        exchange_key(session, issued.key)
-    assert exchange_key(session, rolled.key)
+        exchange_key(session, issued.key, session_length=SESSION_LENGTH)
+    assert exchange_key(session, rolled.key, session_length=SESSION_LENGTH)
 
 
-def test_issue_uses_the_default_key_length(session, monkeypatch):
-    monkeypatch.delenv("BARRELVAULT_KEY_LENGTH", raising=False)
-    _human, secret = _account(session)
-    agent = add_agent(session, _actor(session, secret), "Bot")
-    before = datetime.now(UTC)
-    issue_key(session, _actor(session, secret), agent.user_id)
-    after = datetime.now(UTC)
-    session.refresh(agent)
-    assert before + timedelta(seconds=31536000) <= agent.key_expires_at
-    assert agent.key_expires_at <= after + timedelta(seconds=31536000)
 
 
-def test_invalid_key_length_leaves_the_agent(session, monkeypatch):
-    _human, secret = _account(session)
-    agent = add_agent(session, _actor(session, secret), "Bot")
-    monkeypatch.setenv("BARRELVAULT_KEY_LENGTH", "nope")
-    with pytest.raises(SettingsError):
-        issue_key(session, _actor(session, secret), agent.user_id)
-    session.refresh(agent)
-    assert agent.key_hash is None
-    assert agent.key_expires_at is None
 
 
 def test_issue_and_roll_refuse_an_empty_or_retired_agent(session):
     _human, secret = _account(session)
     agent = add_agent(session, _actor(session, secret), "Bot")
     with pytest.raises(ServiceError):
-        roll_key(session, _actor(session, secret), agent.user_id)
-    issue_key(session, _actor(session, secret), agent.user_id)
+        roll_key(session, _actor(session, secret), agent.user_id, key_length=KEY_LENGTH)
+    issue_key(session, _actor(session, secret), agent.user_id, key_length=KEY_LENGTH)
     retire_agent(session, _actor(session, secret), agent.user_id)
     with pytest.raises(ServiceError):
-        issue_key(session, _actor(session, secret), agent.user_id)
+        issue_key(session, _actor(session, secret), agent.user_id, key_length=KEY_LENGTH)
     with pytest.raises(ServiceError):
-        roll_key(session, _actor(session, secret), agent.user_id)
+        roll_key(session, _actor(session, secret), agent.user_id, key_length=KEY_LENGTH)
     session.refresh(agent)
     assert agent.key_hash is None
     assert agent.key_expires_at is None
@@ -209,7 +192,7 @@ def test_issue_and_roll_refuse_an_empty_or_retired_agent(session):
 def test_retire_is_the_only_way_to_set_retired_at(session):
     _human, secret = _account(session)
     agent, issued = _live_agent(session, secret)
-    agent_secret = exchange_key(session, issued.key)
+    agent_secret = exchange_key(session, issued.key, session_length=SESSION_LENGTH)
     session.commit()
     agent.retired_at = datetime.now(UTC)
     with pytest.raises(ServiceError):
@@ -237,9 +220,9 @@ def test_roll_replaces_an_expired_key(session):
         key_expires_at=(datetime.now(UTC) - timedelta(seconds=1)).isoformat(),
     )
     with pytest.raises(ServiceError):
-        exchange_key(session, issued.key)
-    rolled = roll_key(session, _actor(session, secret), agent.user_id)
-    assert exchange_key(session, rolled.key)
+        exchange_key(session, issued.key, session_length=SESSION_LENGTH)
+    rolled = roll_key(session, _actor(session, secret), agent.user_id, key_length=KEY_LENGTH)
+    assert exchange_key(session, rolled.key, session_length=SESSION_LENGTH)
 
 
 def test_key_edits_outside_issue_roll_and_retire_are_refused(session):
@@ -373,20 +356,20 @@ def test_the_service_acts_as_a_user_without_a_session(session):
     human = create_account(session, "Ada", "ada@example.com", "password-1")
     ada = session.get(User, human.user_id)
     agent = add_agent(session, ada, "Bot")
-    issued = issue_key(session, ada, agent.user_id)
+    issued = issue_key(session, ada, agent.user_id, key_length=KEY_LENGTH)
     assert agent.owner_id == human.user_id
     assert session.exec(select(Token)).all() == []
-    assert exchange_key(session, issued.key)
+    assert exchange_key(session, issued.key, session_length=SESSION_LENGTH)
 
 
 def test_an_acting_agent_cannot_change_agents(session):
     human, secret = _account(session)
     agent, issued = _live_agent(session, secret)
-    agent_secret = exchange_key(session, issued.key)
+    agent_secret = exchange_key(session, issued.key, session_length=SESSION_LENGTH)
     calls = (
         lambda: add_agent(session, _actor(session, agent_secret), "Other"),
-        lambda: issue_key(session, _actor(session, agent_secret), agent.user_id),
-        lambda: roll_key(session, _actor(session, agent_secret), agent.user_id),
+        lambda: issue_key(session, _actor(session, agent_secret), agent.user_id, key_length=KEY_LENGTH),
+        lambda: roll_key(session, _actor(session, agent_secret), agent.user_id, key_length=KEY_LENGTH),
         lambda: retire_agent(session, _actor(session, agent_secret), agent.user_id),
         lambda: reassign_agent(session, _actor(session, agent_secret), agent.user_id),
         lambda: delete_agent(session, _actor(session, agent_secret), agent.user_id),
@@ -404,11 +387,11 @@ def test_a_human_cannot_change_another_accounts_agent(session):
     bea_id, bea_secret = _second_account(session)
     bea_bot, bea_key = _live_agent(session, bea_secret, "Bea bot")
     bea_bare = add_agent(session, _actor(session, bea_secret), "Bea bare")
-    bea_bot_secret = exchange_key(session, bea_key.key)
+    bea_bot_secret = exchange_key(session, bea_key.key, session_length=SESSION_LENGTH)
     session.commit()
     calls = (
-        lambda: issue_key(session, _actor(session, secret), bea_bare.user_id),
-        lambda: roll_key(session, _actor(session, secret), bea_bot.user_id),
+        lambda: issue_key(session, _actor(session, secret), bea_bare.user_id, key_length=KEY_LENGTH),
+        lambda: roll_key(session, _actor(session, secret), bea_bot.user_id, key_length=KEY_LENGTH),
         lambda: retire_agent(session, _actor(session, secret), bea_bot.user_id),
         lambda: delete_agent(session, _actor(session, secret), bea_bare.user_id),
         lambda: reassign_agent(session, _actor(session, secret), bea_bot.user_id),
@@ -430,19 +413,19 @@ def test_a_human_cannot_change_another_accounts_agent(session):
 def test_roll_and_retire_delete_only_the_agent_session(session):
     human, secret = _account(session)
     agent, issued = _live_agent(session, secret)
-    agent_secret = exchange_key(session, issued.key)
-    rolled = roll_key(session, _actor(session, secret), agent.user_id)
+    agent_secret = exchange_key(session, issued.key, session_length=SESSION_LENGTH)
+    rolled = roll_key(session, _actor(session, secret), agent.user_id, key_length=KEY_LENGTH)
     assert authenticate(session, secret).id == human.user_id
     with pytest.raises(ServiceError):
         authenticate(session, agent_secret)
     assert session.exec(select(Token).where(Token.user_id == agent.user_id)).first() is None
-    agent_secret = exchange_key(session, rolled.key)
+    agent_secret = exchange_key(session, rolled.key, session_length=SESSION_LENGTH)
     assert session.exec(select(Token).where(Token.user_id == agent.user_id)).one()
     retire_agent(session, _actor(session, secret), agent.user_id)
     with pytest.raises(ServiceError):
         authenticate(session, agent_secret)
     with pytest.raises(ServiceError):
-        exchange_key(session, rolled.key)
+        exchange_key(session, rolled.key, session_length=SESSION_LENGTH)
     assert authenticate(session, secret).id == human.user_id
     session.refresh(agent)
     assert agent.retired_at is not None
@@ -454,14 +437,14 @@ def test_roll_and_retire_delete_only_the_agent_session(session):
 def test_roll_with_no_session_leaves_none(session):
     _human, secret = _account(session)
     agent, issued = _live_agent(session, secret)
-    roll_key(session, _actor(session, secret), agent.user_id)
+    roll_key(session, _actor(session, secret), agent.user_id, key_length=KEY_LENGTH)
     assert session.exec(select(Token).where(Token.user_id == agent.user_id)).first() is None
 
 
 def test_retire_rolls_back_with_the_transaction(session):
     _human, secret = _account(session)
     agent, issued = _live_agent(session, secret)
-    agent_secret = exchange_key(session, issued.key)
+    agent_secret = exchange_key(session, issued.key, session_length=SESSION_LENGTH)
     session.commit()
     retire_agent(session, _actor(session, secret), agent.user_id)
     session.rollback()
@@ -475,7 +458,7 @@ def test_retire_rolls_back_with_the_transaction(session):
 def test_delete_removes_an_agent_with_nothing_attached(session):
     human, secret = _account(session)
     agent, issued = _live_agent(session, secret)
-    exchange_key(session, issued.key)
+    exchange_key(session, issued.key, session_length=SESSION_LENGTH)
     delete_agent(session, _actor(session, secret), agent.user_id)
     assert session.get(Agent, agent.user_id) is None
     assert session.get(User, agent.user_id) is None
@@ -497,7 +480,7 @@ def test_delete_does_nothing_when_data_is_attached(session):
 def test_reassign_moves_references_and_keeps_owned_by(session):
     human, secret = _account(session)
     agent, issued = _live_agent(session, secret)
-    exchange_key(session, issued.key)
+    exchange_key(session, issued.key, session_length=SESSION_LENGTH)
     _attach(session, agent.user_id, human.user_id)
     reassign_agent(session, _actor(session, secret), agent.user_id)
     assert session.get(Agent, agent.user_id) is None
@@ -526,7 +509,7 @@ def test_create_account_refuses_once_any_user_exists(session):
 def test_a_missing_agent_is_refused(session):
     _human, secret = _account(session)
     with pytest.raises(ServiceError):
-        issue_key(session, _actor(session, secret), 9999)
+        issue_key(session, _actor(session, secret), 9999, key_length=KEY_LENGTH)
 
 
 def test_reassign_with_nothing_attached_removes_the_agent(session):

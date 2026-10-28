@@ -23,7 +23,7 @@ One FastAPI process serves the HTTP routes.
 
 ## Database file
 
-The file is `barrelvault.db`. It is created when the database code needs it. The path is in the [environment list](README.md#environment). `backend/barrelvault/settings.py` is the only reader of environment variables, and it applies the defaults.
+The file is `barrelvault.db`. It is created when the database code needs it. The path is in the [environment list](README.md#environment). `backend/barrelvault/settings.py` is the only reader of environment variables, and it applies the defaults. Settings load once when the process starts, and the caller passes the values the service needs, such as the session and key lengths.
 
 ## Data model
 

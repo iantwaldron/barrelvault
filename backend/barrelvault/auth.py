@@ -22,7 +22,7 @@ def hash_password(password: str) -> str:
     return _passwords.hash(password)
 
 
-def login(session: Session, email: str, password: str) -> str:
+def login(session: Session, email: str, password: str, *, session_length: int) -> str:
     human = session.exec(select(Human).where(Human.email == email)).one_or_none()
     stored = human.password_hash if human is not None else _DUMMY_PASSWORD_HASH
     try:
@@ -31,10 +31,10 @@ def login(session: Session, email: str, password: str) -> str:
         password_matches = False
     if human is None or not password_matches:
         raise ServiceError("refused")
-    return _mint(session, human.user_id)
+    return _mint(session, human.user_id, session_length)
 
 
-def exchange_key(session: Session, key: str) -> str:
+def exchange_key(session: Session, key: str, *, session_length: int) -> str:
     if _blank(key):
         raise ServiceError("refused")
     agent = session.exec(select(Agent).where(Agent.key_hash == _digest(key))).one_or_none()
@@ -42,7 +42,7 @@ def exchange_key(session: Session, key: str) -> str:
         raise ServiceError("refused")
     if agent.key_expires_at is None or _as_utc(agent.key_expires_at) <= datetime.now(UTC):
         raise ServiceError("refused")
-    return _mint(session, agent.user_id)
+    return _mint(session, agent.user_id, session_length)
 
 
 def authenticate(session: Session, secret: str) -> User:
@@ -80,9 +80,9 @@ def delete_session(session: Session, user_id: int) -> None:
         session.delete(token)
 
 
-def _mint(session: Session, user_id: int) -> str:
+def _mint(session: Session, user_id: int, session_length: int) -> str:
     token = Token(user_id=user_id)
-    raw = token.generate_secret()
+    raw = token.generate_secret(session_length)
     existing = session.exec(select(Token).where(Token.user_id == user_id)).one_or_none()
     if existing is not None:
         session.delete(existing)

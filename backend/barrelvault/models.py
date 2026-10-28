@@ -6,7 +6,6 @@ from datetime import UTC, datetime, timedelta
 
 from sqlmodel import Field, Session, SQLModel, select
 
-from barrelvault.settings import load_settings
 
 
 class User(SQLModel, table=True):
@@ -32,12 +31,11 @@ class Agent(SQLModel, table=True):
     key_expires_at: datetime | None = Field(default=None)
     retired_at: datetime | None = Field(default=None)
 
-    def generate_key(self) -> str:
-        """Store a new key hash and expiry. Return the raw key."""
-        length = load_settings().key_length
+    def generate_key(self, key_length: int) -> str:
+        """Store a new key hash and an expiry key_length seconds out. Return the raw key."""
         raw = secrets.token_hex(32)
         self.key_hash = hashlib.sha256(raw.encode()).hexdigest()
-        self.key_expires_at = datetime.now(UTC) + timedelta(seconds=length)
+        self.key_expires_at = datetime.now(UTC) + timedelta(seconds=key_length)
         return raw
 
 
@@ -48,14 +46,13 @@ class Token(SQLModel, table=True):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     expires_at: datetime
 
-    def generate_secret(self) -> str:
-        """Store a new secret hash and expiry. Return the raw secret."""
-        length = load_settings().session_length
+    def generate_secret(self, session_length: int) -> str:
+        """Store a new secret hash and an expiry session_length seconds out. Return the raw secret."""
         raw = secrets.token_hex(32)
         minted = datetime.now(UTC)
         self.secret_hash = hashlib.sha256(raw.encode()).hexdigest()
         self.created_at = minted
-        self.expires_at = minted + timedelta(seconds=length)
+        self.expires_at = minted + timedelta(seconds=session_length)
         return raw
 
 

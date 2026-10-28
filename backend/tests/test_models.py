@@ -8,6 +8,10 @@ from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
 from barrelvault.models import Agent, Human, Token, User
+from barrelvault.settings import DEFAULT_KEY_LENGTH, DEFAULT_SESSION_LENGTH
+
+KEY_LENGTH = DEFAULT_KEY_LENGTH
+SESSION_LENGTH = DEFAULT_SESSION_LENGTH
 
 
 @pytest.fixture
@@ -187,14 +191,13 @@ def test_agents_include_retired(session):
     assert {agent.user_id for agent in found} == {live.user_id, retired.user_id}
 
 
-def test_generate_key_stores_the_hash_and_expiry(session, monkeypatch):
-    monkeypatch.setenv("BARRELVAULT_KEY_LENGTH", "100")
+def test_generate_key_stores_the_hash_and_expiry(session):
     owner = _human(session)
     user = _user(session, "Bot")
     agent = Agent(user_id=user.id, owner_id=owner.user_id, retired_at=datetime.now(UTC))
     retired_at = agent.retired_at
     before = datetime.now(UTC)
-    raw = agent.generate_key()
+    raw = agent.generate_key(100)
     after = datetime.now(UTC)
     session.add(agent)
     session.commit()
@@ -215,22 +218,12 @@ def test_generate_key_stores_the_hash_and_expiry(session, monkeypatch):
     assert agent.retired_at == retired_at
 
 
-def test_generate_key_uses_the_default_length(session, monkeypatch):
-    monkeypatch.delenv("BARRELVAULT_KEY_LENGTH", raising=False)
-    agent = _agent(session, _human(session), "Bot")
-    before = datetime.now(UTC)
-    agent.generate_key()
-    after = datetime.now(UTC)
-    assert agent.key_expires_at is not None
-    assert before + timedelta(seconds=31536000) <= agent.key_expires_at
-    assert agent.key_expires_at <= after + timedelta(seconds=31536000)
 
 
-def test_generate_key_replaces_the_previous_key(session, monkeypatch):
-    monkeypatch.setenv("BARRELVAULT_KEY_LENGTH", "100")
+def test_generate_key_replaces_the_previous_key(session):
     agent = _agent(session, _human(session), "Bot")
-    first = agent.generate_key()
-    second = agent.generate_key()
+    first = agent.generate_key(KEY_LENGTH)
+    second = agent.generate_key(KEY_LENGTH)
     assert first != second
     assert agent.key_hash == hashlib.sha256(second.encode()).hexdigest()
     assert agent.key_hash != hashlib.sha256(first.encode()).hexdigest()
@@ -302,12 +295,11 @@ def test_expires_at_is_required(session):
         )
 
 
-def test_generate_secret_stores_the_hash_and_expiry(session, monkeypatch):
-    monkeypatch.setenv("BARRELVAULT_SESSION_LENGTH", "100")
+def test_generate_secret_stores_the_hash_and_expiry(session):
     user = _user(session, "Ada")
     token = Token(user_id=user.id)
     before = datetime.now(UTC)
-    raw = token.generate_secret()
+    raw = token.generate_secret(100)
     after = datetime.now(UTC)
     session.add(token)
     session.commit()
@@ -326,21 +318,12 @@ def test_generate_secret_stores_the_hash_and_expiry(session, monkeypatch):
     assert raw not in stored
 
 
-def test_generate_secret_uses_the_default_length(session, monkeypatch):
-    monkeypatch.delenv("BARRELVAULT_SESSION_LENGTH", raising=False)
-    token = Token(user_id=_user(session, "Ada").id)
-    before = datetime.now(UTC)
-    token.generate_secret()
-    after = datetime.now(UTC)
-    assert before + timedelta(seconds=604800) <= token.expires_at
-    assert token.expires_at <= after + timedelta(seconds=604800)
 
 
-def test_generate_secret_replaces_the_previous_secret(session, monkeypatch):
-    monkeypatch.setenv("BARRELVAULT_SESSION_LENGTH", "100")
+def test_generate_secret_replaces_the_previous_secret(session):
     token = Token(user_id=_user(session, "Ada").id)
-    first = token.generate_secret()
-    second = token.generate_secret()
+    first = token.generate_secret(100)
+    second = token.generate_secret(100)
     assert first != second
     assert token.secret_hash == hashlib.sha256(second.encode()).hexdigest()
     assert token.secret_hash != hashlib.sha256(first.encode()).hexdigest()

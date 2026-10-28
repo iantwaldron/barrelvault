@@ -16,7 +16,10 @@ from barrelvault.auth import (
     logout,
 )
 from barrelvault.models import Agent, Human, Token, User
-from barrelvault.settings import SettingsError
+from barrelvault.settings import DEFAULT_KEY_LENGTH, DEFAULT_SESSION_LENGTH
+
+KEY_LENGTH = DEFAULT_KEY_LENGTH
+SESSION_LENGTH = DEFAULT_SESSION_LENGTH
 
 
 @pytest.fixture
@@ -45,13 +48,13 @@ def _actor(session: Session, secret: str) -> User:
 
 def _account(session: Session) -> tuple[Human, str]:
     human = create_account(session, "Ada", "ada@example.com", "password-1")
-    secret = login(session, "ada@example.com", "password-1")
+    secret = login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
     return human, secret
 
 
 def _live_agent(session: Session, secret: str, name: str = "Bot") -> tuple[Agent, IssuedKey]:
     agent = add_agent(session, _actor(session, secret), name)
-    issued = issue_key(session, _actor(session, secret), agent.user_id)
+    issued = issue_key(session, _actor(session, secret), agent.user_id, key_length=KEY_LENGTH)
     return agent, issued
 
 
@@ -59,12 +62,12 @@ def _tokens(session: Session) -> list[Token]:
     return list(session.exec(select(Token)).all())
 
 
-def test_login_and_exchange_store_the_actor_and_expiry(session, monkeypatch):
-    monkeypatch.setenv("BARRELVAULT_SESSION_LENGTH", "100")
+def test_login_and_exchange_store_the_actor_and_expiry(session):
     before = datetime.now(UTC)
-    human, secret = _account(session)
+    human = create_account(session, "Ada", "ada@example.com", "password-1")
+    secret = login(session, "ada@example.com", "password-1", session_length=100)
     agent, issued = _live_agent(session, secret)
-    agent_secret = exchange_key(session, issued.key)
+    agent_secret = exchange_key(session, issued.key, session_length=100)
     after = datetime.now(UTC)
     rows = {token.user_id: token for token in _tokens(session)}
     assert set(rows) == {human.user_id, agent.user_id}
@@ -75,15 +78,6 @@ def test_login_and_exchange_store_the_actor_and_expiry(session, monkeypatch):
     assert authenticate(session, agent_secret).id == agent.user_id
 
 
-def test_login_uses_the_default_session_length(session, monkeypatch):
-    monkeypatch.delenv("BARRELVAULT_SESSION_LENGTH", raising=False)
-    create_account(session, "Ada", "ada@example.com", "password-1")
-    before = datetime.now(UTC)
-    login(session, "ada@example.com", "password-1")
-    after = datetime.now(UTC)
-    token = _tokens(session)[0]
-    assert before + timedelta(seconds=604800) <= token.expires_at
-    assert token.expires_at <= after + timedelta(seconds=604800)
 
 
 def test_wrong_email_and_wrong_password_are_the_same_failure(session, monkeypatch):
@@ -97,11 +91,11 @@ def test_wrong_email_and_wrong_password_are_the_same_failure(session, monkeypatc
 
     monkeypatch.setattr(auth._passwords, "verify", verify)
     with pytest.raises(ServiceError):
-        login(session, "missing@example.com", "password-1")
+        login(session, "missing@example.com", "password-1", session_length=SESSION_LENGTH)
     assert calls["n"] == 1
     calls["n"] = 0
     with pytest.raises(ServiceError):
-        login(session, "ada@example.com", "wrong-password")
+        login(session, "ada@example.com", "wrong-password", session_length=SESSION_LENGTH)
     assert calls["n"] == 1
     assert _tokens(session) == []
 
@@ -114,36 +108,36 @@ def test_an_unrecognized_password_hash_is_a_refused_login(session):
     )
     session.expire_all()
     with pytest.raises(ServiceError):
-        login(session, "ada@example.com", "password-1")
+        login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
     assert _tokens(session) == []
 
 
 def test_refused_mint_leaves_the_existing_session(session):
     create_account(session, "Ada", "ada@example.com", "password-1")
-    secret = login(session, "ada@example.com", "password-1")
+    secret = login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
     token_id = _tokens(session)[0].id
     agent, issued = _live_agent(session, secret)
     with pytest.raises(ServiceError):
-        login(session, "ada@example.com", "wrong-password")
+        login(session, "ada@example.com", "wrong-password", session_length=SESSION_LENGTH)
     with pytest.raises(ServiceError):
-        login(session, secret, "password-1")
+        login(session, secret, "password-1", session_length=SESSION_LENGTH)
     with pytest.raises(ServiceError):
-        exchange_key(session, secret)
+        exchange_key(session, secret, session_length=SESSION_LENGTH)
     with pytest.raises(ServiceError):
-        exchange_key(session, "missing-key")
+        exchange_key(session, "missing-key", session_length=SESSION_LENGTH)
     _update_agent(
         session,
         agent.user_id,
         key_expires_at=(datetime.now(UTC) - timedelta(seconds=1)).isoformat(),
     )
     with pytest.raises(ServiceError):
-        exchange_key(session, issued.key)
+        exchange_key(session, issued.key, session_length=SESSION_LENGTH)
     _update_agent(session, agent.user_id, key_hash=None, key_expires_at=None)
     with pytest.raises(ServiceError):
-        exchange_key(session, issued.key)
+        exchange_key(session, issued.key, session_length=SESSION_LENGTH)
     retire_agent(session, _actor(session, secret), agent.user_id)
     with pytest.raises(ServiceError):
-        exchange_key(session, issued.key)
+        exchange_key(session, issued.key, session_length=SESSION_LENGTH)
     human_token = session.exec(select(Token).where(Token.user_id != agent.user_id)).one()
     assert human_token.id == token_id
     assert authenticate(session, secret).name == "Ada"
@@ -151,9 +145,9 @@ def test_refused_mint_leaves_the_existing_session(session):
 
 def test_a_mint_that_does_not_commit_leaves_the_previous_session(session):
     create_account(session, "Ada", "ada@example.com", "password-1")
-    secret = login(session, "ada@example.com", "password-1")
+    secret = login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
     session.commit()
-    login(session, "ada@example.com", "password-1")
+    login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
     session.rollback()
     assert authenticate(session, secret).name == "Ada"
     assert len(_tokens(session)) == 1
@@ -168,9 +162,9 @@ def test_a_second_mint_replaces_the_row(session):
     event.listen(Token, "before_update", _updated)
     try:
         create_account(session, "Ada", "ada@example.com", "password-1")
-        first = login(session, "ada@example.com", "password-1")
+        first = login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
         first_hash = _tokens(session)[0].secret_hash
-        second = login(session, "ada@example.com", "password-1")
+        second = login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
         rows = _tokens(session)
         assert updates == []
         assert len(rows) == 1
@@ -182,28 +176,20 @@ def test_a_second_mint_replaces_the_row(session):
         event.remove(Token, "before_update", _updated)
 
 
-def test_invalid_session_length_refuses_before_delete(session, monkeypatch):
-    create_account(session, "Ada", "ada@example.com", "password-1")
-    secret = login(session, "ada@example.com", "password-1")
-    monkeypatch.setenv("BARRELVAULT_SESSION_LENGTH", "nope")
-    with pytest.raises(SettingsError):
-        login(session, "ada@example.com", "password-1")
-    monkeypatch.delenv("BARRELVAULT_SESSION_LENGTH", raising=False)
-    assert authenticate(session, secret).name == "Ada"
 
 
 def test_a_mint_without_an_expiry_is_refused(session, monkeypatch):
     create_account(session, "Ada", "ada@example.com", "password-1")
-    secret = login(session, "ada@example.com", "password-1")
+    secret = login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
     session.commit()
 
-    def generate_secret(self) -> str:
+    def generate_secret(self, _session_length: int) -> str:
         self.secret_hash = "unfinished"
         return "raw"
 
     monkeypatch.setattr(auth.Token, "generate_secret", generate_secret)
     with pytest.raises(ServiceError):
-        login(session, "ada@example.com", "password-1")
+        login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
     session.rollback()
     assert session.exec(select(Token).where(Token.secret_hash == "unfinished")).first() is None
     assert authenticate(session, secret).name == "Ada"
@@ -211,7 +197,7 @@ def test_a_mint_without_an_expiry_is_refused(session, monkeypatch):
 
 def test_session_field_changes_are_refused(session):
     create_account(session, "Ada", "ada@example.com", "password-1")
-    secret = login(session, "ada@example.com", "password-1")
+    secret = login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
     session.commit()
     token = _tokens(session)[0]
     original_expiry = token.expires_at
@@ -241,7 +227,7 @@ def test_session_field_changes_are_refused(session):
 
 def test_authenticate_refuses_unknown_and_expired_secrets(session):
     create_account(session, "Ada", "ada@example.com", "password-1")
-    secret = login(session, "ada@example.com", "password-1")
+    secret = login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
     with pytest.raises(ServiceError):
         authenticate(session, "missing")
     with pytest.raises(ServiceError):
@@ -255,7 +241,7 @@ def test_authenticate_refuses_unknown_and_expired_secrets(session):
     with pytest.raises(ServiceError):
         authenticate(session, secret)
     assert len(_tokens(session)) == 1
-    login(session, "ada@example.com", "password-1")
+    login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
     assert len(_tokens(session)) == 1
     with pytest.raises(ServiceError):
         authenticate(session, secret)
@@ -263,7 +249,7 @@ def test_authenticate_refuses_unknown_and_expired_secrets(session):
 
 def test_authenticate_refuses_a_session_whose_user_is_gone(session):
     human = create_account(session, "Ada", "ada@example.com", "password-1")
-    secret = login(session, "ada@example.com", "password-1")
+    secret = login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
     session.commit()
     connection = session.connection()
     connection.execute(text("PRAGMA foreign_keys=OFF"))
@@ -280,7 +266,7 @@ def test_authenticate_refuses_a_session_whose_user_is_gone(session):
 def test_a_dead_agent_key_deletes_that_session_only(session):
     human, secret = _account(session)
     agent, issued = _live_agent(session, secret)
-    agent_secret = exchange_key(session, issued.key)
+    agent_secret = exchange_key(session, issued.key, session_length=SESSION_LENGTH)
     _update_agent(session, agent.user_id, key_hash=None, key_expires_at=None)
     session.commit()
     with pytest.raises(ServiceError):
@@ -292,7 +278,7 @@ def test_a_dead_agent_key_deletes_that_session_only(session):
 def test_a_retired_agent_session_is_deleted_and_refused(session):
     human, secret = _account(session)
     agent, issued = _live_agent(session, secret)
-    agent_secret = exchange_key(session, issued.key)
+    agent_secret = exchange_key(session, issued.key, session_length=SESSION_LENGTH)
     _update_agent(session, agent.user_id, retired_at=datetime.now(UTC).isoformat())
     session.commit()
     with pytest.raises(ServiceError):
@@ -303,14 +289,12 @@ def test_a_retired_agent_session_is_deleted_and_refused(session):
 
 def test_dead_agent_key_stays_deleted_when_the_request_rolls_back(tmp_path, monkeypatch):
     monkeypatch.setenv("BARRELVAULT_DB", str(tmp_path / "barrelvault.db"))
-    monkeypatch.delenv("BARRELVAULT_SESSION_LENGTH", raising=False)
-    monkeypatch.delenv("BARRELVAULT_KEY_LENGTH", raising=False)
     _reset_engine()
     SQLModel.metadata.create_all(db.get_engine())
     with db.open_session() as db_session:
         _human, secret = _account(db_session)
         agent, issued = _live_agent(db_session, secret)
-        agent_secret = exchange_key(db_session, issued.key)
+        agent_secret = exchange_key(db_session, issued.key, session_length=SESSION_LENGTH)
         agent_id = agent.user_id
     with db.open_session() as db_session:
         _update_agent(
@@ -333,7 +317,7 @@ def test_dead_agent_key_stays_deleted_when_the_request_rolls_back(tmp_path, monk
 def test_dead_agent_key_delete_survives_a_session_closed_without_commit(session):
     _human, secret = _account(session)
     agent, issued = _live_agent(session, secret)
-    agent_secret = exchange_key(session, issued.key)
+    agent_secret = exchange_key(session, issued.key, session_length=SESSION_LENGTH)
     _update_agent(session, agent.user_id, key_hash=None, key_expires_at=None)
     session.commit()
     request = Session(session.get_bind())
@@ -348,7 +332,7 @@ def test_dead_agent_key_delete_survives_a_session_closed_without_commit(session)
 def test_dead_agent_key_delete_commits_with_the_caller(session):
     _human, secret = _account(session)
     agent, issued = _live_agent(session, secret)
-    agent_secret = exchange_key(session, issued.key)
+    agent_secret = exchange_key(session, issued.key, session_length=SESSION_LENGTH)
     _update_agent(session, agent.user_id, key_hash=None, key_expires_at=None)
     session.commit()
     with pytest.raises(ServiceError):
@@ -363,7 +347,7 @@ def test_blank_secrets_are_refused(session):
     create_account(session, "Ada", "ada@example.com", "password-1")
     for secret in (" ", None):
         with pytest.raises(ServiceError):
-            exchange_key(session, secret)
+            exchange_key(session, secret, session_length=SESSION_LENGTH)
         with pytest.raises(ServiceError):
             authenticate(session, secret)
         logout(session, secret)
@@ -379,7 +363,7 @@ def test_a_new_session_without_expiry_is_refused(session):
 
 def test_a_naive_expiry_is_still_compared_in_utc(session):
     create_account(session, "Ada", "ada@example.com", "password-1")
-    secret = login(session, "ada@example.com", "password-1")
+    secret = login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
     token = _tokens(session)[0]
     _update_token(session, token.user_id, expires_at="2000-01-01 00:00:00")
     with pytest.raises(ServiceError):
@@ -396,7 +380,7 @@ def test_a_naive_datetime_is_treated_as_utc():
 
 def test_logout_deletes_the_row(session):
     create_account(session, "Ada", "ada@example.com", "password-1")
-    secret = login(session, "ada@example.com", "password-1")
+    secret = login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
     logout(session, secret)
     assert _tokens(session) == []
     with pytest.raises(ServiceError):
@@ -407,8 +391,6 @@ def test_logout_deletes_the_row(session):
 
 def test_overlapping_mints_leave_one_session(tmp_path, monkeypatch):
     monkeypatch.setenv("BARRELVAULT_DB", str(tmp_path / "barrelvault.db"))
-    monkeypatch.delenv("BARRELVAULT_SESSION_LENGTH", raising=False)
-    monkeypatch.delenv("BARRELVAULT_KEY_LENGTH", raising=False)
     _reset_engine()
     SQLModel.metadata.create_all(db.get_engine())
     with db.open_session() as db_session:
@@ -422,7 +404,7 @@ def test_overlapping_mints_leave_one_session(tmp_path, monkeypatch):
         try:
             with db.open_session() as db_session:
                 barrier.wait(timeout=5)
-                found.append(auth._mint(db_session, user_id))
+                found.append(auth._mint(db_session, user_id, SESSION_LENGTH))
         except BaseException as exc:
             errors.append(exc)
 

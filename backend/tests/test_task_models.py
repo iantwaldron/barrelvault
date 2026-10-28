@@ -310,3 +310,12 @@ def test_blank_text_and_non_integer_numbers_are_refused_by_the_schema(session, a
         r=f"carriage{cr}return",
         by=ada,
     )
+
+
+def test_setting_an_expired_field_to_its_stored_value_writes_no_snapshot(session, ada):
+    task = _task(session, ada)
+    session.commit()
+    session.expire(task, ["title"])
+    task.title = "Call Chad"
+    session.flush()
+    assert len(_history(session, task.id)) == 1

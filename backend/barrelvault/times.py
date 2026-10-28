@@ -6,6 +6,16 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from barrelvault.errors import Invalid
 
 
+def now() -> datetime:
+    """The current UTC time to the millisecond.
+
+    A browser's Date keeps milliseconds, so an updated_at a client sends back
+    compares equal to the stored one.
+    """
+    moment = datetime.now(UTC)
+    return moment.replace(microsecond=moment.microsecond // 1000 * 1000)
+
+
 def as_utc(value: datetime) -> datetime:
     """A stored datetime in UTC. SQLite hands back a naive one, which was stored as UTC."""
     if value.tzinfo is None:

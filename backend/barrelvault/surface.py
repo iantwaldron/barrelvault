@@ -54,22 +54,32 @@ class DuplicateWarnings:
     ) -> TaskDetail:
         """Create a task, warning before a duplicate and honoring a confirmation once."""
         key = self._fingerprint(session, actor, title, fields.get("due_at"))
-        with self._lock:
-            self._prune()
-            if allow_duplicate:
-                if key not in self._issued:
-                    raise Conflict("confirm a duplicate only after its warning")
-                created = create_task(session, actor, title, allow_duplicate=True, **fields)
-                del self._issued[key]
-                return created
-            try:
-                return create_task(session, actor, title, **fields)
-            except Duplicate:
-                # A repeat warning moves to the back, with a fresh time.
-                self._issued.pop(key, None)
-                self._issued[key] = self._clock()
+        # The lock guards only the record. The create runs outside it, so a session
+        # waiting on the database never holds up another caller's check.
+        if allow_duplicate:
+            with self._lock:
                 self._prune()
+                warned = self._issued.pop(key, None) is not None
+            if not warned:
+                raise Conflict("confirm a duplicate only after its warning")
+            try:
+                return create_task(session, actor, title, allow_duplicate=True, **fields)
+            except Exception:
+                # The confirmation did not create the task, so the warning stands.
+                self._record(key)
                 raise
+        try:
+            return create_task(session, actor, title, **fields)
+        except Duplicate:
+            self._record(key)
+            raise
+
+    def _record(self, key: Fingerprint) -> None:
+        """Record a warning as just issued. A repeat moves to the back with a fresh time."""
+        with self._lock:
+            self._issued.pop(key, None)
+            self._issued[key] = self._clock()
+            self._prune()
 
     def _fingerprint(
         self, session: Session, actor: User, title: str, due_at: datetime | None

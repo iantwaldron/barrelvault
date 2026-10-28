@@ -5,7 +5,7 @@ changed by the actor, which moves the task's updated_at without a history snapsh
 """
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 
 from sqlmodel import Session, col, select
 
@@ -14,7 +14,7 @@ from barrelvault.errors import Conflict, Invalid, NotFound
 from barrelvault.models import Block, Task, User
 from barrelvault.status import OPEN
 from barrelvault.tasks import load_tree, task_in_account, touch
-from barrelvault.times import as_utc
+from barrelvault.times import as_utc, now
 
 
 @dataclass(frozen=True)
@@ -38,7 +38,7 @@ def add_block(session: Session, actor: User, task_id: int, reason: str) -> Block
         task_id=task_id,
         reason=_check_reason(reason),
         created_by=actor_id(actor),
-        created_at=datetime.now(UTC),
+        created_at=now(),
     )
     session.add(block)
     touch(task, actor)
@@ -53,7 +53,7 @@ def release_block(session: Session, actor: User, block_id: int) -> BlockView:
     if block.released_at is not None:
         raise Conflict("block is already released")
     block.released_by = actor_id(actor)
-    block.released_at = datetime.now(UTC)
+    block.released_at = now()
     return _save(session, actor, block, task)
 
 

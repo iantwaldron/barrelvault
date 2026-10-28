@@ -44,9 +44,6 @@ class Tree:
     def __contains__(self, task_id: object) -> bool:
         return task_id in self._rows
 
-    def row(self, task_id: int) -> TaskRow:
-        return self._rows[task_id]
-
     def children(self, parent_id: int | None) -> list[TaskRow]:
         """The direct children of a task, or the roots for None, in list order."""
         return list(self._children.get(parent_id, ()))

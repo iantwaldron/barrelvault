@@ -35,7 +35,7 @@ def test_descendants_come_parents_first_at_every_depth():
     assert [row.id for row in tree.descendants(1)] == [2, 3, 4]
     assert [row.id for row in tree.descendants(None)] == [1, 2, 3, 4, 5]
     assert 3 in tree and 99 not in tree
-    assert tree.row(3).parent_id == 2
+    assert [row.id for row in tree.children(2)] == [3]
 
 
 def test_a_dropped_ancestor_makes_its_descendants_effectively_dropped():
@@ -43,7 +43,7 @@ def test_a_dropped_ancestor_makes_its_descendants_effectively_dropped():
     tree = Tree(rows)
     assert all(tree.is_effectively_dropped(task_id) for task_id in (1, 2, 3))
     assert not tree.is_effectively_dropped(4)
-    assert tree.row(2).status == IN_PROGRESS
+    assert tree.children(1)[0].status == IN_PROGRESS
 
 
 def test_reopening_or_moving_out_brings_a_child_back():

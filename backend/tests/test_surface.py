@@ -86,3 +86,13 @@ def test_a_warning_and_its_confirmation_fold_case_the_same_way(session, ada):
     with pytest.raises(Duplicate):
         warnings.create(session, ada, "CAFÉ RENT")
     assert warnings.create(session, ada, "café rent", allow_duplicate=True)
+
+
+def test_a_confirmation_that_fails_keeps_its_warning(session, ada):
+    warnings = DuplicateWarnings()
+    create_task(session, ada, "Pay rent")
+    with pytest.raises(Duplicate):
+        warnings.create(session, ada, "Pay rent")
+    with pytest.raises(Invalid):
+        warnings.create(session, ada, "Pay rent", allow_duplicate=True, estimate_minutes=-1)
+    assert warnings.create(session, ada, "Pay rent", allow_duplicate=True)

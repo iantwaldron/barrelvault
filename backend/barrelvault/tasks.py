@@ -7,7 +7,7 @@ the tree works out.
 """
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any, Final
 
 from sqlalchemy import select as sql_select
@@ -19,7 +19,7 @@ from barrelvault.models import Block, Task, TaskHistory, User, title_key
 from barrelvault.notes import append_note, close_open_fence, dropped_block, dropped_reason
 from barrelvault.status import CLOSED, DROPPED, OPEN, STATUSES, TODO
 from barrelvault.tags import add_tags, has_tags, read_tags, remove_tags, stored_tags
-from barrelvault.times import as_utc, to_utc
+from barrelvault.times import as_utc, now, to_utc
 from barrelvault.tree import TaskRow, Tree
 
 # A field the caller did not send. An update leaves it as stored.
@@ -97,7 +97,7 @@ def create_task(
         task_in_account(session, owner.user_id, parent_id)
     if not allow_duplicate:
         _check_duplicate(session, owner.user_id, clean_title, stored_due)
-    now = datetime.now(UTC)
+    moment = now()
     task = Task(
         parent_id=parent_id,
         title=clean_title,
@@ -107,9 +107,9 @@ def create_task(
         estimate_minutes=_check_estimate(estimate_minutes),
         due_at=stored_due,
         created_by=actor_id(actor),
-        created_at=now,
+        created_at=moment,
         updated_by=actor_id(actor),
-        updated_at=now,
+        updated_at=moment,
         owned_by=owner.user_id,
     )
     session.add(task)
@@ -179,7 +179,7 @@ def update_task(
     """
     owner = account_of(session, actor)
     task = task_in_account(session, owner.user_id, task_id)
-    _check_current(task, expected_updated_at)
+    _check_current(task, expected_updated_at, owner.timezone)
     if notes is not UNSET and append_notes is not None:
         raise Invalid("send notes or append_notes, not both")
     if tags is not UNSET and (add is not None or remove is not None):
@@ -220,7 +220,7 @@ def drop_task(
     """Set the task to dropped. A reason is appended to notes as a dropped block."""
     owner = account_of(session, actor)
     task = task_in_account(session, owner.user_id, task_id)
-    _check_current(task, expected_updated_at)
+    _check_current(task, expected_updated_at, owner.timezone)
     changes: dict[str, Any] = {"status": DROPPED}
     if reason is not None and reason.strip():
         changes["notes"] = append_note(close_open_fence(task.notes), dropped_block(reason))
@@ -230,8 +230,15 @@ def drop_task(
 def delete_task(session: Session, actor: User, task_id: int) -> None:
     """Delete the task. The cascade takes its subtree, blocks, and history."""
     owner = account_of(session, actor)
-    session.delete(task_in_account(session, owner.user_id, task_id))
+    task = task_in_account(session, owner.user_id, task_id)
+    gone = {task_id} | {row.id for row in load_tree(session, owner.user_id).descendants(task_id)}
+    session.delete(task)
     session.flush()
+    # The database cascade removed these rows, so the session must stop handing them out.
+    for obj in list(session.identity_map.values()):
+        on_task = obj.id if isinstance(obj, Task) else getattr(obj, "task_id", None)
+        if isinstance(obj, Task | Block | TaskHistory) and on_task in gone:
+            session.expunge(obj)
 
 
 def task_history(session: Session, actor: User, task_id: int) -> list[HistoryEntry]:
@@ -249,7 +256,7 @@ def task_history(session: Session, actor: User, task_id: int) -> list[HistoryEnt
 
 def touch(task: Task, actor: User) -> None:
     """Mark the task changed by the actor. A block change calls this, and it writes no snapshot."""
-    task.updated_at = datetime.now(UTC)
+    task.updated_at = now()
     task.updated_by = actor_id(actor)
 
 
@@ -361,10 +368,10 @@ def _release_or_refuse(
         return
     if not (release_blocks and status in CLOSED):
         raise Conflict("task is blocked")
-    now = datetime.now(UTC)
+    moment = now()
     for block in blocks:
         block.released_by = actor_id(actor)
-        block.released_at = now
+        block.released_at = moment
         session.add(block)
     # The releases go first, since the schema refuses a status change on a blocked task.
     session.flush()
@@ -396,8 +403,15 @@ def _check_parent_in(tree: Tree, parent_id: int | None) -> None:
         raise NotFound("no such task")
 
 
-def _check_current(task: Task, expected_updated_at: datetime | None) -> None:
-    if expected_updated_at is not None and as_utc(task.updated_at) != as_utc(expected_updated_at):
+def _check_current(task: Task, expected_updated_at: datetime | None, timezone: str) -> None:
+    """Refuse the write when the task changed since the caller read it.
+
+    An updated_at sent without an offset is read in the account's timezone, like any
+    other datetime a caller sends.
+    """
+    if expected_updated_at is None:
+        return
+    if as_utc(task.updated_at) != to_utc(expected_updated_at, timezone):
         raise Conflict("task changed since it was read")
 
 

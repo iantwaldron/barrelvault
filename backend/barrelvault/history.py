@@ -7,16 +7,16 @@ together. The editor is the row's updated_by, so the recorder reads no session.
 """
 
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any, TypeVar
 
-from sqlalchemy import JSON, String, event, insert
+from sqlalchemy import JSON, String, event, insert, select
 from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Mapper
 from sqlalchemy.orm.attributes import instance_state
 from sqlmodel import Field, SQLModel
 
-from barrelvault.times import as_utc
+from barrelvault.times import as_utc, now
 
 # Columns every audited model carries that a snapshot leaves out.
 UNRECORDED = frozenset({"id", "created_by", "created_at", "updated_at", "updated_by", "owned_by"})
@@ -71,7 +71,7 @@ def history(history_model: type[HistoryBase]) -> Callable[[Model], Model]:
                     {
                         subject_key: row.id,
                         "user_id": row.updated_by,
-                        "created_at": datetime.now(UTC),
+                        "created_at": now(),
                         "state": snapshot(row),
                     }
                 )
@@ -82,7 +82,17 @@ def history(history_model: type[HistoryBase]) -> Callable[[Model], Model]:
 
         def after_update(_mapper: Mapper[Any], connection: Connection, row: Any) -> None:
             state = instance_state(row)
-            if any(state.attrs[name].history.has_changes() for name in fields):
+            if not any(state.attrs[name].history.has_changes() for name in fields):
+                return
+            # Attribute history can call an equal value changed, for one that was expired
+            # and set again, so the last stored snapshot decides.
+            last = connection.execute(
+                select(target_table.c.state)
+                .where(target_table.c[subject_key] == row.id)
+                .order_by(target_table.c.created_at.desc(), target_table.c.id.desc())
+                .limit(1)
+            ).scalar()
+            if last != snapshot(row):
                 record(connection, row)
 
         event.listen(model, "after_insert", after_insert)

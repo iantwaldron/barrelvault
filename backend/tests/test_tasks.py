@@ -2,6 +2,7 @@
 
 import threading
 from datetime import UTC, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import text
@@ -330,8 +331,9 @@ def test_a_delete_takes_the_subtree_and_its_history(session, ada):
     root = create_task(session, ada, "Root")
     child = create_task(session, ada, "Child", parent_id=root.id)
     keep = create_task(session, ada, "Keep")
+    stale_child = session.get(Task, child.id)
     delete_task(session, ada, root.id)
-    session.expire_all()
+    assert stale_child not in session
     assert [task.id for task in task_tree(session, ada)] == [keep.id]
     assert session.get(Task, child.id) is None
     assert {row.task_id for row in session.exec(select(TaskHistory))} == {keep.id}
@@ -464,3 +466,19 @@ def test_a_blank_append_changes_nothing(session, ada):
         same = update_task(session, ada, task.id, append_notes=blank)
         assert same.notes == "hello" and same.updated_at == task.updated_at
     assert len(task_history(session, ada, task.id)) == 1
+
+
+def test_an_updated_at_without_an_offset_is_read_in_the_account_timezone(session, ada):
+    task = create_task(session, ada, "Call Chad")
+    as_stored = task.updated_at.replace(tzinfo=None)
+    with pytest.raises(Conflict):
+        update_task(session, ada, task.id, title="UTC wall time", expected_updated_at=as_stored)
+    chicago = task.updated_at.astimezone(ZoneInfo("America/Chicago")).replace(tzinfo=None)
+    assert update_task(session, ada, task.id, title="Local", expected_updated_at=chicago)
+
+
+def test_service_timestamps_are_whole_milliseconds(session, ada):
+    task = create_task(session, ada, "Call Chad")
+    assert task.created_at.microsecond % 1000 == 0
+    echoed = datetime.fromisoformat(task.updated_at.isoformat(timespec="milliseconds"))
+    assert update_task(session, ada, task.id, title="Echoed", expected_updated_at=echoed)

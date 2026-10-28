@@ -38,4 +38,4 @@ Each connection turns foreign keys on, uses WAL, and sets a busy timeout of 5000
 
 ## Migrations
 
-The schema is managed with Alembic. The revisions are in `backend/barrelvault/migrations/versions`, and setup applies them. After a model change, run `alembic revision --autogenerate -m "..."` from `backend/` with the virtualenv active, then review the generated file.
+The schema is managed with Alembic. The revisions are in `backend/barrelvault/migrations/versions`, and setup applies them. After a model change, run `alembic revision --autogenerate -m "..."` from `backend/` with the virtualenv active, then review the generated file. Autogenerate does not see triggers, so a change to `models.TRIGGERS` is written into the revision by hand. A test compares the migrated triggers and CHECK constraints with the models.

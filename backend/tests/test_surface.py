@@ -78,3 +78,11 @@ def test_the_record_drops_warnings_past_the_window_and_past_its_size(session, ad
     _refused_first(warnings, session, ada, "One")
     assert warnings.create(session, ada, "Two", allow_duplicate=True)
     assert warnings.create(session, ada, "Three", allow_duplicate=True)
+
+
+def test_a_warning_and_its_confirmation_fold_case_the_same_way(session, ada):
+    warnings = DuplicateWarnings()
+    create_task(session, ada, "Café rent")
+    with pytest.raises(Duplicate):
+        warnings.create(session, ada, "CAFÉ RENT")
+    assert warnings.create(session, ada, "café rent", allow_duplicate=True)

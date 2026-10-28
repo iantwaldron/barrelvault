@@ -17,7 +17,7 @@ from sqlmodel import Session
 
 from barrelvault.account import account_of, actor_id
 from barrelvault.errors import Conflict, Duplicate
-from barrelvault.models import User
+from barrelvault.models import User, title_key
 from barrelvault.tasks import TaskDetail, create_task, normalize_title
 from barrelvault.times import to_utc
 
@@ -77,7 +77,7 @@ class DuplicateWarnings:
         """The acting user, the title as the duplicate check compares it, and the stored due_at."""
         owner = account_of(session, actor)
         stored_due = to_utc(due_at, owner.timezone) if due_at is not None else None
-        return (actor_id(actor), normalize_title(title).lower(), stored_due)
+        return (actor_id(actor), title_key(normalize_title(title)), stored_due)
 
     def _prune(self) -> None:
         cutoff = self._clock() - self._window

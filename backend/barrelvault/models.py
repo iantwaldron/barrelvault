@@ -9,10 +9,10 @@ import hashlib
 import secrets
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import DDL, CheckConstraint, Index, SmallInteger, String, event
+from sqlalchemy import DDL, CheckConstraint, Index, SmallInteger, event
 from sqlmodel import Field, Session, SQLModel, select
 
-from barrelvault.history import HistoryBase, history
+from barrelvault.history import HISTORY_INFO, HistoryBase, history
 from barrelvault.status import CLOSED
 from barrelvault.times import as_utc
 
@@ -95,21 +95,29 @@ class TaskHistory(HistoryBase, table=True):
 @history(TaskHistory)
 class Task(SQLModel, table=True):
     __table_args__ = (
-        CheckConstraint("status IN (0, 1, 2, 3)", name="ck_task_status"),
         CheckConstraint(
-            "estimate_minutes IS NULL OR estimate_minutes BETWEEN 0 AND 32767",
+            "typeof(status) = 'integer' AND status IN (0, 1, 2, 3)", name="ck_task_status"
+        ),
+        CheckConstraint(
+            "estimate_minutes IS NULL OR (typeof(estimate_minutes) = 'integer' "
+            "AND estimate_minutes BETWEEN 0 AND 32767)",
             name="ck_task_estimate_minutes",
         ),
-        CheckConstraint("trim(title) != ''", name="ck_task_title"),
-        # The duplicate check looks up a title in the account. title compares without case.
-        Index("ix_task_owned_by_title", "owned_by", "title"),
+        CheckConstraint(
+            "trim(title, ' ' || char(9) || char(10) || char(13)) != ''", name="ck_task_title"
+        ),
+        # The duplicate check looks up title_key in the account.
+        Index("ix_task_owned_by_title_key", "owned_by", "title_key"),
     )
 
     id: int | None = Field(default=None, primary_key=True)
     parent_id: int | None = Field(
         default=None, foreign_key="task.id", ondelete="CASCADE", index=True
     )
-    title: str = Field(sa_type=String(collation="NOCASE"))
+    title: str
+    # The title folded for comparison without regard to case, in any script. A task
+    # write sets it from title before the flush, so a caller never sends it.
+    title_key: str = Field(default="", sa_column_kwargs={"info": {HISTORY_INFO: False}})
     notes: str | None = Field(default=None)
     tags: str | None = Field(default=None)
     status: int = Field(default=0, sa_type=SmallInteger, sa_column_kwargs={"server_default": "0"})
@@ -130,7 +138,9 @@ class Task(SQLModel, table=True):
 class Block(SQLModel, table=True):
     __table_args__ = (
         CheckConstraint(
-            "trim(reason) != '' AND instr(reason, char(10)) = 0", name="ck_block_reason"
+            "trim(reason, ' ' || char(9) || char(10) || char(13)) != '' "
+            "AND instr(reason, char(10)) = 0 AND instr(reason, char(13)) = 0",
+            name="ck_block_reason",
         ),
         CheckConstraint(
             "(released_at IS NULL) = (released_by IS NULL)", name="ck_block_release_pair"
@@ -215,9 +225,26 @@ BEGIN SELECT RAISE(ABORT, 'a blocked task keeps its status'); END""",
     """CREATE TRIGGER block_on_an_open_task BEFORE INSERT ON block
 WHEN (SELECT status FROM task WHERE id = NEW.task_id) NOT IN (0, 1)
 BEGIN SELECT RAISE(ABORT, 'a block is added only to an open task'); END""",
-    """CREATE TRIGGER block_release_is_final BEFORE UPDATE OF released_at ON block
-WHEN OLD.released_at IS NOT NULL
+    # released_by moves only when a reassign hands an agent's release to its owner.
+    """CREATE TRIGGER block_release_is_final BEFORE UPDATE OF released_at, released_by ON block
+WHEN OLD.released_at IS NOT NULL AND (
+  NEW.released_at IS NOT OLD.released_at
+  OR (NEW.released_by IS NOT OLD.released_by AND NOT (
+    NEW.released_by = (SELECT owned_by FROM task WHERE id = NEW.task_id)
+    AND EXISTS (
+      SELECT 1 FROM agent WHERE user_id = OLD.released_by
+        AND owner_id = (SELECT owned_by FROM task WHERE id = NEW.task_id)
+    )
+  ))
+)
 BEGIN SELECT RAISE(ABORT, 'a released block stays released'); END""",
+    # A block and a history row go only with their task, by the delete cascade.
+    """CREATE TRIGGER block_goes_with_its_task BEFORE DELETE ON block
+WHEN EXISTS (SELECT 1 FROM task WHERE id = OLD.task_id)
+BEGIN SELECT RAISE(ABORT, 'a block is deleted only with its task'); END""",
+    """CREATE TRIGGER task_history_goes_with_its_task BEFORE DELETE ON task_history
+WHEN EXISTS (SELECT 1 FROM task WHERE id = OLD.task_id)
+BEGIN SELECT RAISE(ABORT, 'a history row is deleted only with its task'); END""",
     """CREATE TRIGGER block_is_fixed BEFORE UPDATE OF task_id, created_at ON block
 WHEN NEW.task_id IS NOT OLD.task_id OR NEW.created_at IS NOT OLD.created_at
 BEGIN SELECT RAISE(ABORT, 'a block stays on its task'); END""",
@@ -228,6 +255,18 @@ WHEN NEW.task_id IS NOT OLD.task_id
   OR NEW.state IS NOT OLD.state
 BEGIN SELECT RAISE(ABORT, 'a history row is fixed'); END""",
 )
+
+
+def title_key(title: str) -> str:
+    """The form two titles are compared in: whitespace collapsed, case folded."""
+    return " ".join(title.split()).casefold()
+
+
+@event.listens_for(Task, "before_insert")
+@event.listens_for(Task, "before_update")
+def _set_title_key(_mapper: object, _connection: object, task: Task) -> None:
+    task.title_key = title_key(task.title)
+
 
 for _trigger in TRIGGERS:
     event.listen(SQLModel.metadata, "after_create", DDL(_trigger))

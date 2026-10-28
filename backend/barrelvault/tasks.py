@@ -15,7 +15,7 @@ from sqlmodel import Session, col, select
 
 from barrelvault.account import account_of, actor_id
 from barrelvault.errors import Conflict, Duplicate, Invalid, NotFound
-from barrelvault.models import Block, Task, TaskHistory, User
+from barrelvault.models import Block, Task, TaskHistory, User, title_key
 from barrelvault.notes import append_note, dropped_block, dropped_reason
 from barrelvault.status import CLOSED, DROPPED, OPEN, STATUSES, TODO
 from barrelvault.tags import add_tags, has_tags, read_tags, remove_tags, stored_tags
@@ -301,7 +301,7 @@ def find_duplicate(
     session: Session, account_id: int, title: str, due_at: datetime | None
 ) -> Task | None:
     """A task in the account that a create with this title and due_at would duplicate."""
-    query = select(Task).where(Task.owned_by == account_id, Task.title == title)
+    query = select(Task).where(Task.owned_by == account_id, Task.title_key == title_key(title))
     if due_at is None:
         query = query.where(col(Task.due_at).is_(None), col(Task.status).in_(OPEN))
     else:
@@ -402,7 +402,7 @@ def _check_current(task: Task, expected_updated_at: datetime | None) -> None:
 
 
 def _check_status(status: int) -> int:
-    if isinstance(status, bool) or status not in STATUSES:
+    if type(status) is not int or status not in STATUSES:
         raise Invalid("status is 0, 1, 2, or 3")
     return status
 
@@ -410,7 +410,7 @@ def _check_status(status: int) -> int:
 def _check_estimate(estimate_minutes: int | None) -> int | None:
     if estimate_minutes is None:
         return None
-    if isinstance(estimate_minutes, bool) or not 0 <= estimate_minutes <= ESTIMATE_MAX:
+    if type(estimate_minutes) is not int or not 0 <= estimate_minutes <= ESTIMATE_MAX:
         raise Invalid(f"estimate_minutes is from 0 through {ESTIMATE_MAX}")
     return estimate_minutes
 

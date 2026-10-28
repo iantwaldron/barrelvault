@@ -2,7 +2,7 @@
 
 Revision ID: 0001
 Revises: 
-Create Date: 2026-10-28 11:07:28.516659
+Create Date: 2026-10-28 11:50:49.480753
 
 """
 from typing import Sequence, Union
@@ -78,9 +78,24 @@ BEGIN SELECT RAISE(ABORT, 'a blocked task keeps its status'); END""",
     """CREATE TRIGGER block_on_an_open_task BEFORE INSERT ON block
 WHEN (SELECT status FROM task WHERE id = NEW.task_id) NOT IN (0, 1)
 BEGIN SELECT RAISE(ABORT, 'a block is added only to an open task'); END""",
-    """CREATE TRIGGER block_release_is_final BEFORE UPDATE OF released_at ON block
-WHEN OLD.released_at IS NOT NULL
+    """CREATE TRIGGER block_release_is_final BEFORE UPDATE OF released_at, released_by ON block
+WHEN OLD.released_at IS NOT NULL AND (
+  NEW.released_at IS NOT OLD.released_at
+  OR (NEW.released_by IS NOT OLD.released_by AND NOT (
+    NEW.released_by = (SELECT owned_by FROM task WHERE id = NEW.task_id)
+    AND EXISTS (
+      SELECT 1 FROM agent WHERE user_id = OLD.released_by
+        AND owner_id = (SELECT owned_by FROM task WHERE id = NEW.task_id)
+    )
+  ))
+)
 BEGIN SELECT RAISE(ABORT, 'a released block stays released'); END""",
+    """CREATE TRIGGER block_goes_with_its_task BEFORE DELETE ON block
+WHEN EXISTS (SELECT 1 FROM task WHERE id = OLD.task_id)
+BEGIN SELECT RAISE(ABORT, 'a block is deleted only with its task'); END""",
+    """CREATE TRIGGER task_history_goes_with_its_task BEFORE DELETE ON task_history
+WHEN EXISTS (SELECT 1 FROM task WHERE id = OLD.task_id)
+BEGIN SELECT RAISE(ABORT, 'a history row is deleted only with its task'); END""",
     """CREATE TRIGGER block_is_fixed BEFORE UPDATE OF task_id, created_at ON block
 WHEN NEW.task_id IS NOT OLD.task_id OR NEW.created_at IS NOT OLD.created_at
 BEGIN SELECT RAISE(ABORT, 'a block stays on its task'); END""",
@@ -140,7 +155,8 @@ def upgrade() -> None:
     op.create_table('task',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('parent_id', sa.Integer(), nullable=True),
-    sa.Column('title', sa.String(collation='NOCASE'), nullable=False),
+    sa.Column('title', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
+    sa.Column('title_key', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('notes', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('tags', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('status', sa.SmallInteger(), server_default='0', nullable=False),
@@ -151,9 +167,9 @@ def upgrade() -> None:
     sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
     sa.Column('updated_by', sa.Integer(), nullable=False),
     sa.Column('owned_by', sa.Integer(), nullable=False),
-    sa.CheckConstraint("trim(title) != ''", name='ck_task_title'),
-    sa.CheckConstraint('estimate_minutes IS NULL OR estimate_minutes BETWEEN 0 AND 32767', name='ck_task_estimate_minutes'),
-    sa.CheckConstraint('status IN (0, 1, 2, 3)', name='ck_task_status'),
+    sa.CheckConstraint("estimate_minutes IS NULL OR (typeof(estimate_minutes) = 'integer' AND estimate_minutes BETWEEN 0 AND 32767)", name='ck_task_estimate_minutes'),
+    sa.CheckConstraint("trim(title, ' ' || char(9) || char(10) || char(13)) != ''", name='ck_task_title'),
+    sa.CheckConstraint("typeof(status) = 'integer' AND status IN (0, 1, 2, 3)", name='ck_task_status'),
     sa.ForeignKeyConstraint(['created_by'], ['user.id'], ),
     sa.ForeignKeyConstraint(['owned_by'], ['user.id'], ),
     sa.ForeignKeyConstraint(['parent_id'], ['task.id'], ondelete='CASCADE'),
@@ -162,7 +178,7 @@ def upgrade() -> None:
     )
     with op.batch_alter_table('task', schema=None) as batch_op:
         batch_op.create_index(batch_op.f('ix_task_owned_by'), ['owned_by'], unique=False)
-        batch_op.create_index('ix_task_owned_by_title', ['owned_by', 'title'], unique=False)
+        batch_op.create_index('ix_task_owned_by_title_key', ['owned_by', 'title_key'], unique=False)
         batch_op.create_index(batch_op.f('ix_task_parent_id'), ['parent_id'], unique=False)
 
     op.create_table('token',
@@ -184,7 +200,7 @@ def upgrade() -> None:
     sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
     sa.Column('released_by', sa.Integer(), nullable=True),
     sa.Column('released_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
-    sa.CheckConstraint("trim(reason) != '' AND instr(reason, char(10)) = 0", name='ck_block_reason'),
+    sa.CheckConstraint("trim(reason, ' ' || char(9) || char(10) || char(13)) != '' AND instr(reason, char(10)) = 0 AND instr(reason, char(13)) = 0", name='ck_block_reason'),
     sa.CheckConstraint('(released_at IS NULL) = (released_by IS NULL)', name='ck_block_release_pair'),
     sa.ForeignKeyConstraint(['created_by'], ['user.id'], ),
     sa.ForeignKeyConstraint(['released_by'], ['user.id'], ),
@@ -226,7 +242,7 @@ def downgrade() -> None:
     op.drop_table('token')
     with op.batch_alter_table('task', schema=None) as batch_op:
         batch_op.drop_index(batch_op.f('ix_task_parent_id'))
-        batch_op.drop_index('ix_task_owned_by_title')
+        batch_op.drop_index('ix_task_owned_by_title_key')
         batch_op.drop_index(batch_op.f('ix_task_owned_by'))
 
     op.drop_table('task')

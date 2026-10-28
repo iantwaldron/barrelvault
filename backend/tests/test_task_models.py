@@ -256,3 +256,57 @@ def test_open_for_stops_at_the_last_update_once_closed(session, ada):
     assert task.open_for(NOW + timedelta(days=9)) == timedelta(hours=1)
     task.status = DROPPED
     assert task.open_for() == timedelta(hours=1)
+
+
+def test_title_key_follows_the_title_and_stays_out_of_history(session, ada):
+    task = _task(session, ada, title="Café  Rent")
+    assert task.title_key == "café rent"
+    task.title = "STRASSE"
+    session.flush()
+    assert task.title_key == "strasse"
+    assert all("title_key" not in row.state for row in _history(session, task.id))
+
+
+def test_a_block_or_history_row_goes_only_with_its_task(session, ada):
+    task = _task(session, ada)
+    session.add(Block(task_id=task.id, reason="Waiting", created_by=ada, created_at=NOW))
+    session.commit()
+    _refused(session, "DELETE FROM block")
+    _refused(session, "DELETE FROM task_history")
+    session.delete(session.get(Task, task.id))
+    session.commit()
+    assert session.exec(select(Block)).all() == []
+
+
+def test_a_released_block_keeps_who_released_it(session, ada):
+    bea = _person(session, "Bea", "bea@example.com")
+    task = _task(session, ada)
+    session.add(
+        Block(
+            task_id=task.id,
+            reason="Waiting",
+            created_by=ada,
+            created_at=NOW,
+            released_by=ada,
+            released_at=NOW,
+        )
+    )
+    session.commit()
+    _refused(session, "UPDATE block SET released_by = :to", to=bea)
+
+
+def test_blank_text_and_non_integer_numbers_are_refused_by_the_schema(session, ada):
+    task = _task(session, ada)
+    session.commit()
+    tab, cr = "\t", "\r"
+    _refused(session, "UPDATE task SET title = :t", t=f" {tab}{cr} ")
+    _refused(session, "UPDATE task SET estimate_minutes = 5.5")
+    _refused(session, "UPDATE task SET status = 1.5")
+    _refused(
+        session,
+        "INSERT INTO block (task_id, reason, created_by, created_at) "
+        "VALUES (:t, :r, :by, '2026-01-01 00:00:00')",
+        t=task.id,
+        r=f"carriage{cr}return",
+        by=ada,
+    )

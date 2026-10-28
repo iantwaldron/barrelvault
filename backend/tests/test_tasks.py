@@ -83,19 +83,25 @@ def test_owned_by_is_the_persons_and_never_changes(session, ada, bot):
     task = create_task(session, bot, "Draft")
     session.commit()
     for owner in (bot.id, 9999):
-        with pytest.raises(IntegrityError):
+        with pytest.raises(IntegrityError, match="a task is owned by a human"):
             session.connection().execute(
                 text(
-                    "INSERT INTO task (title, created_by, created_at, updated_by, updated_at, "
-                    "owned_by) VALUES ('x', :by, '2026-01-01', :by, '2026-01-01', :owner)"
+                    "INSERT INTO task (title, title_key, created_by, created_at, updated_by, "
+                    "updated_at, owned_by) "
+                    "VALUES ('x', 'x', :by, '2026-01-01', :by, '2026-01-01', :owner)"
                 ),
                 {"by": ada.id, "owner": owner},
             )
         session.rollback()
-    with pytest.raises(IntegrityError):
+    with pytest.raises(IntegrityError, match="a task keeps its owner"):
         session.connection().execute(
             text("UPDATE task SET owned_by = :to WHERE id = :id"), {"to": bot.id, "id": task.id}
         )
+    session.rollback()
+    stored = session.get(Task, task.id)
+    stored.owned_by = bot.id
+    with pytest.raises(IntegrityError, match="a task keeps its owner"):
+        session.flush()
 
 
 def test_a_title_is_stored_trimmed_and_collapsed_and_fields_are_checked(session, ada):
@@ -105,6 +111,12 @@ def test_a_title_is_stored_trimmed_and_collapsed_and_fields_are_checked(session,
         (Invalid, "title is required", lambda: create_task(session, ada, "   ")),
         (Invalid, "status is 0, 1, 2, or 3", lambda: create_task(session, ada, "x", status=4)),
         (Invalid, "status is 0, 1, 2, or 3", lambda: create_task(session, ada, "x", status=True)),
+        (Invalid, "status is 0, 1, 2, or 3", lambda: create_task(session, ada, "x", status=1.0)),
+        (
+            Invalid,
+            "estimate_minutes is from 0 through 32767",
+            lambda: create_task(session, ada, "x", estimate_minutes=5.5),
+        ),
         (
             Invalid,
             "estimate_minutes is from 0 through 32767",
@@ -145,8 +157,9 @@ def test_due_at_is_stored_in_utc_and_read_in_the_account_timezone_without_an_off
 def test_null_text_columns_read_as_empty(session, ada):
     session.connection().execute(
         text(
-            "INSERT INTO task (title, notes, tags, created_by, created_at, updated_by, "
-            "updated_at, owned_by) VALUES ('Raw', NULL, NULL, :by, :at, :by, :at, :by)"
+            "INSERT INTO task (title, title_key, notes, tags, created_by, created_at, "
+            "updated_by, updated_at, owned_by) "
+            "VALUES ('Raw', 'raw', NULL, NULL, :by, :at, :by, :at, :by)"
         ),
         {"by": ada.id, "at": "2026-01-01 00:00:00.000000"},
     )
@@ -428,3 +441,13 @@ def test_a_close_can_release_the_open_blocks_first(session, ada, bot):
     _block(session, other.id, ada)
     dropped = drop_task(session, bot, other.id, "Deal fell through.", release_blocks=True)
     assert dropped.status == DROPPED and dropped.dropped_reason == "Deal fell through."
+
+
+def test_a_duplicate_title_matches_without_case_in_any_script(session, ada):
+    create_task(session, ada, "Café rent", due_at=DUE)
+    for title in ("CAFÉ RENT", "café  rent"):
+        with pytest.raises(Duplicate):
+            create_task(session, ada, title, due_at=DUE)
+    create_task(session, ada, "Straße")
+    with pytest.raises(Duplicate):
+        create_task(session, ada, "STRASSE")

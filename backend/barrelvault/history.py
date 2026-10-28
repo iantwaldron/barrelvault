@@ -20,6 +20,8 @@ from barrelvault.times import as_utc
 
 # Columns every audited model carries that a snapshot leaves out.
 UNRECORDED = frozenset({"id", "created_by", "created_at", "updated_at", "updated_by", "owned_by"})
+# A column whose info sets "history" to False is derived from another and left out too.
+HISTORY_INFO = "history"
 
 Model = TypeVar("Model", bound=type[SQLModel])
 
@@ -38,7 +40,11 @@ def history(history_model: type[HistoryBase]) -> Callable[[Model], Model]:
 
     def register(model: Model) -> Model:
         table = model.__table__  # type: ignore[attr-defined]
-        fields = [column.name for column in table.columns if column.name not in UNRECORDED]
+        fields = [
+            column.name
+            for column in table.columns
+            if column.name not in UNRECORDED and column.info.get(HISTORY_INFO, True)
+        ]
         # A type decorator such as sqlmodel's AutoString wraps the String it stores.
         text_fields = {
             column.name

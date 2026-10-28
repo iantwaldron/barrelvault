@@ -90,9 +90,10 @@ def test_owned_by_is_the_persons_and_never_changes(session, ada, bot):
             session.connection().execute(
                 text(
                     "INSERT INTO task (title, created_by, created_at, updated_by, updated_at, "
-                    "owned_by) VALUES ('x', :by, '2026-01-01', :by, '2026-01-01', :owner)"
+                    "owned_by) VALUES ('x', :owner, '2026-01-01', :owner, '2026-01-01', :owner)"
                 ),
-                {"by": ada.id, "owner": owner},
+                # The editor is the would-be owner, so only the ownership rule is broken.
+                {"owner": owner},
             )
         session.rollback()
     with pytest.raises(IntegrityError, match="a task keeps its owner"):

@@ -310,3 +310,67 @@ def test_setting_an_expired_field_to_its_stored_value_writes_no_snapshot(session
     task.title = "Call Chad"
     session.flush()
     assert len(_history(session, task.id)) == 1
+
+
+def test_a_move_cannot_nest_a_task_under_itself_or_below_it(session, ada):
+    root = _task(session, ada)
+    middle = _task(session, ada, parent_id=root.id)
+    leaf = _task(session, ada, parent_id=middle.id)
+    other = _task(session, ada)
+    session.commit()
+    move = "UPDATE task SET parent_id = :parent WHERE id = :id"
+    for parent in (root.id, middle.id, leaf.id):
+        _refused(session, move, parent=parent, id=root.id)
+    session.connection().execute(text(move), {"parent": other.id, "id": leaf.id})
+    session.connection().execute(text(move), {"parent": None, "id": middle.id})
+    session.commit()
+    assert (session.get(Task, leaf.id).parent_id, session.get(Task, middle.id).parent_id) == (
+        other.id,
+        None,
+    )
+
+
+def test_every_editor_is_in_the_tasks_account(session, ada):
+    bea = _person(session, "Bea", "bea@example.com")
+    beas_bot = _agent(session, bea, "Bea's bot")
+    my_bot = _agent(session, ada, "Bot")
+    task = _task(session, ada, actor_id=my_bot)
+    session.add(Block(task_id=task.id, reason="Waiting", created_by=ada, created_at=NOW))
+    session.commit()
+    insert_task = (
+        "INSERT INTO task (title, created_by, created_at, updated_by, updated_at, owned_by) "
+        "VALUES ('x', :created, '2026-01-01', :updated, '2026-01-01', :owner)"
+    )
+    insert_block = (
+        "INSERT INTO block (task_id, reason, created_by, created_at, released_by, released_at) "
+        "VALUES (:task, 'Waiting', :created, '2026-01-01', :released, :released_at)"
+    )
+    insert_history = (
+        "INSERT INTO task_history (task_id, user_id, created_at, state) "
+        "VALUES (:task, :user, '2026-01-01', '{}')"
+    )
+    for outsider in (bea, beas_bot):
+        _refused(session, insert_task, created=outsider, updated=ada, owner=ada)
+        _refused(session, insert_task, created=ada, updated=outsider, owner=ada)
+        _refused(session, "UPDATE task SET updated_by = :by", by=outsider)
+        _refused(
+            session, insert_block, task=task.id, created=outsider, released=None, released_at=None
+        )
+        _refused(
+            session,
+            insert_block,
+            task=task.id,
+            created=ada,
+            released=outsider,
+            released_at="2026-01-01",
+        )
+        _refused(session, "UPDATE block SET created_by = :by", by=outsider)
+        _refused(
+            session, "UPDATE block SET released_by = :by, released_at = '2026-01-01'", by=outsider
+        )
+        _refused(session, insert_history, task=task.id, user=outsider)
+        _refused(session, "UPDATE task_history SET user_id = :by", by=outsider)
+    # The owner and the owner's own agent are in the account.
+    session.connection().execute(text("UPDATE task SET updated_by = :by"), {"by": ada})
+    session.connection().execute(text("UPDATE block SET created_by = :by"), {"by": my_bot})
+    session.commit()

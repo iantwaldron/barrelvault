@@ -240,6 +240,73 @@ BEGIN SELECT RAISE(ABORT, 'a block is deleted only with its task'); END""",
     """CREATE TRIGGER task_history_goes_with_its_task BEFORE DELETE ON task_history
 WHEN EXISTS (SELECT 1 FROM task WHERE id = OLD.task_id)
 BEGIN SELECT RAISE(ABORT, 'a history row is deleted only with its task'); END""",
+    # Only a move can make a cycle, since a new task has nothing under it.
+    """CREATE TRIGGER task_parent_is_not_under_it BEFORE UPDATE OF parent_id ON task
+WHEN NEW.parent_id IS NOT NULL AND NEW.id IN (
+  WITH RECURSIVE above(id) AS (
+    SELECT NEW.parent_id
+    UNION SELECT t.parent_id FROM task AS t JOIN above ON t.id = above.id
+    WHERE t.parent_id IS NOT NULL
+  )
+  SELECT id FROM above
+)
+BEGIN SELECT RAISE(ABORT, 'a task cannot be nested under itself or a task under it'); END""",
+    # Whoever a row names as acting is the owner or one of the owner's agents.
+    """CREATE TRIGGER task_editors_in_account BEFORE INSERT ON task
+WHEN NOT (
+  NEW.created_by = NEW.owned_by
+  OR EXISTS (SELECT 1 FROM agent WHERE user_id = NEW.created_by AND owner_id = NEW.owned_by)
+) OR NOT (
+  NEW.updated_by = NEW.owned_by
+  OR EXISTS (SELECT 1 FROM agent WHERE user_id = NEW.updated_by AND owner_id = NEW.owned_by)
+)
+BEGIN SELECT RAISE(ABORT, 'an editor is in the task''s account'); END""",
+    """CREATE TRIGGER task_editor_in_account_on_update BEFORE UPDATE OF updated_by ON task
+WHEN NOT (
+  NEW.updated_by = NEW.owned_by
+  OR EXISTS (SELECT 1 FROM agent WHERE user_id = NEW.updated_by AND owner_id = NEW.owned_by)
+)
+BEGIN SELECT RAISE(ABORT, 'an editor is in the task''s account'); END""",
+    """CREATE TRIGGER block_editors_in_account BEFORE INSERT ON block
+WHEN NOT EXISTS (
+  SELECT 1 FROM task WHERE id = NEW.task_id AND (
+    NEW.created_by = owned_by
+    OR EXISTS (SELECT 1 FROM agent WHERE user_id = NEW.created_by AND owner_id = owned_by)
+  ) AND (
+    NEW.released_by IS NULL OR NEW.released_by = owned_by
+    OR EXISTS (SELECT 1 FROM agent WHERE user_id = NEW.released_by AND owner_id = owned_by)
+  )
+)
+BEGIN SELECT RAISE(ABORT, 'an editor is in the task''s account'); END""",
+    """CREATE TRIGGER block_editors_in_account_on_update
+BEFORE UPDATE OF created_by, released_by ON block
+WHEN NOT EXISTS (
+  SELECT 1 FROM task WHERE id = NEW.task_id AND (
+    NEW.created_by = owned_by
+    OR EXISTS (SELECT 1 FROM agent WHERE user_id = NEW.created_by AND owner_id = owned_by)
+  ) AND (
+    NEW.released_by IS NULL OR NEW.released_by = owned_by
+    OR EXISTS (SELECT 1 FROM agent WHERE user_id = NEW.released_by AND owner_id = owned_by)
+  )
+)
+BEGIN SELECT RAISE(ABORT, 'an editor is in the task''s account'); END""",
+    """CREATE TRIGGER task_history_editor_in_account BEFORE INSERT ON task_history
+WHEN NOT EXISTS (
+  SELECT 1 FROM task WHERE id = NEW.task_id AND (
+    NEW.user_id = owned_by
+    OR EXISTS (SELECT 1 FROM agent WHERE user_id = NEW.user_id AND owner_id = owned_by)
+  )
+)
+BEGIN SELECT RAISE(ABORT, 'an editor is in the task''s account'); END""",
+    """CREATE TRIGGER task_history_editor_in_account_on_update
+BEFORE UPDATE OF user_id ON task_history
+WHEN NOT EXISTS (
+  SELECT 1 FROM task WHERE id = NEW.task_id AND (
+    NEW.user_id = owned_by
+    OR EXISTS (SELECT 1 FROM agent WHERE user_id = NEW.user_id AND owner_id = owned_by)
+  )
+)
+BEGIN SELECT RAISE(ABORT, 'an editor is in the task''s account'); END""",
     """CREATE TRIGGER block_is_fixed BEFORE UPDATE OF task_id, created_at ON block
 WHEN NEW.task_id IS NOT OLD.task_id OR NEW.created_at IS NOT OLD.created_at
 BEGIN SELECT RAISE(ABORT, 'a block stays on its task'); END""",

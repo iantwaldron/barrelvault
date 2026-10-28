@@ -143,6 +143,18 @@ class _key_write:
         self.session.info.pop(KEY_WRITE, None)
 
 
+def account_of(session: Session, actor: User) -> Human:
+    """The person whose account the actor acts in: the actor, or an agent's owner."""
+    human = session.get(Human, actor.id)
+    if human is not None:
+        return human
+    agent = session.get(Agent, actor.id)
+    owner = session.get(Human, agent.owner_id) if agent is not None else None
+    if owner is None:
+        raise NotFound("no such user")
+    return owner
+
+
 def _add_user(session: Session, name: str) -> int:
     user = User(name=name)
     session.add(user)

@@ -130,6 +130,10 @@ Every task and block read and write is limited to the acting user's account: `ow
 
 The person or an agent can change `title`, `notes`, `tags`, `status`, `estimate_minutes`, `due_at`, and `parent_id`. Any status change is allowed, including a completed task back to todo. `title` is required and is not blank after trimming. `status` is `0`, `1`, or `2`. `estimate_minutes` is from 0 through 32767.
 
+An update changes only the fields the caller sends, and every other field keeps its stored value. Two fields also take an operation applied to the stored value inside the write: appending text to `notes`, and adding or removing tags. A caller that adds to a field uses the operation rather than reading the field and writing it back, so a change made between its read and its write is kept. An append to empty `notes` stores the text alone. An append to existing `notes` adds a blank line and then the text.
+
+An update may carry the `updated_at` the caller read. When the stored `updated_at` differs, because the task or one of its blocks changed since, the update is refused as a conflict and nothing is written, so the caller reads again and decides on current values. An update without it is applied. An agent that reads, works, and then writes passes it. Tests cover a partial update that leaves the other fields alone, an append and a tag add that keep a change made after the caller's read, a stale `updated_at` refused with nothing written, a current one applied, and a block change that makes an earlier `updated_at` stale.
+
 `owned_by` is set once at create and stays put. The person stores their own user id. An agent stores its `owner_id`. The service rejects a write whose `owned_by` is not the human's user id. Tests cover a create by the person, a create by an agent, an `owned_by` set to an agent id, an `owned_by` set to an id that is not the human, and an update that tries to change `owned_by`. `created_by` and `created_at` stay put for the life of the row. `created_by` is the acting user's id. Do not default it to a string. A Human profile on `created_by` means the person created the task. An Agent profile means an agent created it. `updated_at` and `updated_by` change when the task row changes, and when a block on that task changes. `updated_by` is the acting user. On create it is the same user as `created_by`, and `updated_at` equals `created_at`. Adding or releasing a block does not write a history snapshot.
 
 How long a task has been open is a model function, not a stored column. For a completed task it is `updated_at` minus `created_at`. For any other status it is the current UTC time minus `created_at`. A later edit of a completed task moves `updated_at`, and the span moves with it. Block intervals are not subtracted.
@@ -153,6 +157,8 @@ On save, a helper takes the submitted string and returns the stored form: tokens
 On read, the tag helper takes that coerced string and returns its tokens. `""` returns no tokens. The task screen and a history snapshot both display tags by passing their value to that helper.
 
 A list can filter by tags. The filter's tags pass through the save helper, and a task matches when every one of them is a whole token in its `tags`. `deal` does not match `deal:chad`.
+
+Adding a tag passes it through the save helper and puts it after the stored tokens, and adding one already there changes nothing. Removing a tag drops that token, compared in the stored lowercase form, and removing one that is not there changes nothing. An add or remove that leaves `tags` as it was is not a change: it does not bump `updated_at` or write a snapshot.
 
 Changing `tags` is a change to the task row, so it bumps `updated_at` and writes a history snapshot.
 
@@ -198,4 +204,4 @@ The history insert and the task write are one transaction. A rollback or a faile
 
 ## Out of scope for v0.1
 
-Multi-user, public hosting, notifications, recurring tasks, mobile app, desktop wrapper. A `source` field for where a task came from, such as email or a call. Prioritization as a whole, including `value_tier`, rank, and a stored top-three. Goal and comments. Time entries, including timers and an hours report. Per-agent permission control.
+Multi-user, public hosting, notifications, recurring tasks, mobile app, desktop wrapper. A `source` field for where a task came from, such as email or a call. Prioritization as a whole, including `value_tier`, rank, and a stored top-three. Goal and comments. Time entries, including timers and an hours report. Per-agent permission control. Assigning a task to a user, to be re-evaluated if agents start duplicating work; until then a `claimed:<name>` tag serves.

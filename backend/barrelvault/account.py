@@ -6,7 +6,8 @@ from typing import NamedTuple
 from sqlalchemy import text
 from sqlmodel import Session, select
 
-from barrelvault.auth import ServiceError, delete_session, hash_password
+from barrelvault.auth import delete_session, hash_password
+from barrelvault.errors import Conflict, Forbidden, Invalid, NotFound
 from barrelvault.guards import KEY_WRITE, SETUP_WRITE
 from barrelvault.models import Agent, Human, User
 
@@ -29,10 +30,11 @@ def is_set_up(session: Session) -> bool:
 
 def create_account(session: Session, name: str, email: str, password: str) -> Human:
     """Create the first human. Setup is the only caller."""
-    if _blank(name) or _blank(email) or _blank(password):
-        raise ServiceError("refused")
+    for field, value in (("name", name), ("email", email), ("password", password)):
+        if _blank(value):
+            raise Invalid(f"{field} is required")
     if is_set_up(session):
-        raise ServiceError("refused")
+        raise Conflict("setup has already run")
     user = User(name=name)
     session.add(user)
     session.flush()
@@ -52,8 +54,10 @@ def create_account(session: Session, name: str, email: str, password: str) -> Hu
 
 def add_agent(session: Session, actor: User, name: str) -> Agent:
     human = _acting_human(session, actor)
-    if _blank(name) or _name_taken(session, name):
-        raise ServiceError("refused")
+    if _blank(name):
+        raise Invalid("name is required")
+    if _name_taken(session, name):
+        raise Conflict("name is taken")
     user = User(name=name)
     session.add(user)
     session.flush()
@@ -66,8 +70,10 @@ def add_agent(session: Session, actor: User, name: str) -> Agent:
 def issue_key(session: Session, actor: User, agent_user_id: int, *, key_length: int) -> IssuedKey:
     human = _acting_human(session, actor)
     agent = _agent(session, human, agent_user_id)
-    if agent.retired_at is not None or agent.key_hash is not None:
-        raise ServiceError("refused")
+    if agent.retired_at is not None:
+        raise Conflict("agent is retired")
+    if agent.key_hash is not None:
+        raise Conflict("agent already has a key")
     with _key_write(session, "issue"):
         raw = agent.generate_key(key_length)
         session.add(agent)
@@ -78,8 +84,10 @@ def issue_key(session: Session, actor: User, agent_user_id: int, *, key_length: 
 def roll_key(session: Session, actor: User, agent_user_id: int, *, key_length: int) -> IssuedKey:
     human = _acting_human(session, actor)
     agent = _agent(session, human, agent_user_id)
-    if agent.retired_at is not None or agent.key_hash is None:
-        raise ServiceError("refused")
+    if agent.retired_at is not None:
+        raise Conflict("agent is retired")
+    if agent.key_hash is None:
+        raise Conflict("agent has no key")
     with _key_write(session, "roll"):
         raw = agent.generate_key(key_length)
         delete_session(session, agent.user_id)
@@ -101,12 +109,18 @@ def retire_agent(session: Session, actor: User, agent_user_id: int) -> None:
         session.flush()
 
 
-def delete_agent(session: Session, actor: User, agent_user_id: int) -> None:
+def delete_agent(session: Session, actor: User, agent_user_id: int) -> bool:
+    """Delete an agent with nothing attached and return True.
+
+    With data attached, change nothing and return False, so the caller can ask
+    the person to reassign or retire.
+    """
     human = _acting_human(session, actor)
     agent = _agent(session, human, agent_user_id)
     if _attached(session, agent.user_id):
-        return
+        return False
     _remove_agent(session, agent)
+    return True
 
 
 def reassign_agent(session: Session, actor: User, agent_user_id: int) -> None:
@@ -132,7 +146,7 @@ def _acting_human(session: Session, actor: User) -> Human:
     """Only a person creates or changes an agent. An acting agent is refused."""
     human = session.get(Human, actor.id)
     if human is None:
-        raise ServiceError("refused")
+        raise Forbidden("only a person changes agents")
     return human
 
 
@@ -142,7 +156,7 @@ def _agent(session: Session, human: Human, user_id: int) -> Agent:
         select(Agent).where(Agent.user_id == user_id, Agent.owner_id == human.user_id)
     ).one_or_none()
     if agent is None:
-        raise ServiceError("refused")
+        raise NotFound("no such agent")
     return agent
 
 

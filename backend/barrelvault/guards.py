@@ -6,7 +6,7 @@ Rules that hold for every write are constraints and triggers in models.py.
 from sqlalchemy import event, inspect
 from sqlalchemy.orm import Session
 
-from barrelvault.errors import ServiceError
+from barrelvault.errors import Forbidden
 from barrelvault.models import Agent, Human
 
 # Set in session.info by the service while it issues, rolls, or retires a key.
@@ -19,7 +19,7 @@ SETUP_WRITE = "setup_write"
 def _check_flush(session: Session, _flush_context: object, _instances: object) -> None:
     for obj in session.new:
         if isinstance(obj, Human) and not session.info.get(SETUP_WRITE):
-            raise ServiceError("refused")
+            raise Forbidden("only setup creates a human")
     for obj in session.dirty:
         if isinstance(obj, Agent) and session.is_modified(obj):
             _check_agent_update(obj, session.info.get(KEY_WRITE))
@@ -31,6 +31,6 @@ def _check_agent_update(agent: Agent, key_write: object) -> None:
         state.attrs[name].history.has_changes() for name in ("key_hash", "key_expires_at")
     )
     if key_changed and key_write not in ("issue", "roll", "retire"):
-        raise ServiceError("refused")
+        raise Forbidden("an agent's key changes only by issue, roll, or retire")
     if state.attrs.retired_at.history.has_changes() and key_write != "retire":
-        raise ServiceError("refused")
+        raise Forbidden("an agent is retired only by retire")

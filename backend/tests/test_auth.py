@@ -10,12 +10,12 @@ from sqlmodel import Session, SQLModel, select
 from barrelvault import auth, db
 from barrelvault.account import create_account, retire_agent
 from barrelvault.auth import (
-    ServiceError,
     authenticate,
     exchange_key,
     login,
     logout,
 )
+from barrelvault.errors import Refused, ServiceError
 from barrelvault.models import Token, User
 from tests.support import (
     SESSION_LENGTH,
@@ -77,6 +77,23 @@ def test_an_unrecognized_password_hash_is_a_refused_login(session):
     with pytest.raises(ServiceError):
         login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
     assert _tokens(session) == []
+
+
+def test_every_auth_refusal_is_the_same(session):
+    _human, secret = make_account(session)
+    _agent, issued = live_agent(session, secret)
+    calls = (
+        lambda: login(session, "ada@example.com", "wrong", session_length=SESSION_LENGTH),
+        lambda: login(session, "missing@example.com", "password-1", session_length=SESSION_LENGTH),
+        lambda: exchange_key(session, "missing-key", session_length=SESSION_LENGTH),
+        lambda: exchange_key(session, secret, session_length=SESSION_LENGTH),
+        lambda: authenticate(session, issued.key),
+        lambda: authenticate(session, " "),
+    )
+    for call in calls:
+        with pytest.raises(Refused) as raised:
+            call()
+        assert raised.value.message == "refused"
 
 
 def test_refused_mint_leaves_the_existing_session(session):

@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session as OrmSession
 from sqlalchemy.orm import SessionTransaction
 from sqlmodel import Session, select
 
-from barrelvault.errors import ServiceError
+from barrelvault.errors import Refused
 from barrelvault.models import Agent, Human, Token, User
 
 _passwords = PasswordHash.recommended()
@@ -31,37 +31,37 @@ def login(session: Session, email: str, password: str, *, session_length: int) -
     except UnknownHashError:
         password_matches = False
     if human is None or not password_matches:
-        raise ServiceError("refused")
+        raise Refused("refused")
     return _mint(session, human.user_id, session_length)
 
 
 def exchange_key(session: Session, key: str, *, session_length: int) -> str:
     if _blank(key):
-        raise ServiceError("refused")
+        raise Refused("refused")
     agent = session.exec(select(Agent).where(Agent.key_hash == _digest(key))).one_or_none()
     # A retired agent has no key, so it never matches here.
     if agent is None or _agent_key_is_dead(agent):
-        raise ServiceError("refused")
+        raise Refused("refused")
     return _mint(session, agent.user_id, session_length)
 
 
 def authenticate(session: Session, secret: str) -> User:
     """Accept a session secret and return its user. The API and MCP use only this check."""
     if _blank(secret):
-        raise ServiceError("refused")
+        raise Refused("refused")
     token = session.exec(select(Token).where(Token.secret_hash == _digest(secret))).one_or_none()
     if token is None or _as_utc(token.expires_at) <= datetime.now(UTC):
-        raise ServiceError("refused")
+        raise Refused("refused")
     user = session.get(User, token.user_id)
     if user is None:
-        raise ServiceError("refused")
+        raise Refused("refused")
     agent = session.get(Agent, user.id)
     if agent is not None and _agent_key_is_dead(agent):
         # The delete rides the caller's transaction. If that rolls back, the
         # hook below repeats only the delete, so the caller's writes stay undone.
         session.info.setdefault(_DEAD_SESSIONS, set()).add(token.id)
         session.delete(token)
-        raise ServiceError("refused")
+        raise Refused("refused")
     return user
 
 

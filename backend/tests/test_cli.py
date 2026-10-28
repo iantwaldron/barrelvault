@@ -78,7 +78,7 @@ def test_a_blank_password_is_refused(database, monkeypatch, capsys):
     with pytest.raises(SystemExit) as raised:
         main(["setup"])
     assert raised.value.code == 1
-    assert capsys.readouterr().err == "Setup was refused.\n"
+    assert capsys.readouterr().err == "Setup was refused: password is required.\n"
     with open_session() as session:
         assert session.exec(select(User)).first() is None
 
@@ -116,7 +116,7 @@ def test_overlapping_setup_runs_create_one_human(database, monkeypatch, capsys):
     assert outcomes.count("created") == 1
     assert len(exits) == 1
     assert exits[0].code == 1
-    assert "Setup was refused.\n" in capsys.readouterr().err
+    assert "Setup was refused: setup has already run.\n" in capsys.readouterr().err
     with open_session() as session:
         assert len(session.exec(select(User)).all()) == 1
 

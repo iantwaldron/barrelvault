@@ -16,7 +16,8 @@ from barrelvault.account import (
     retire_agent,
     roll_key,
 )
-from barrelvault.auth import ServiceError, authenticate, exchange_key
+from barrelvault.auth import authenticate, exchange_key
+from barrelvault.errors import Conflict, Forbidden, Invalid, NotFound, ServiceError
 from barrelvault.guards import SETUP_WRITE
 from barrelvault.models import Agent, Human, Token, User
 from tests.support import (
@@ -435,7 +436,7 @@ def test_delete_removes_an_agent_with_nothing_attached(session):
     human, secret = make_account(session)
     agent, issued = live_agent(session, secret)
     exchange_key(session, issued.key, session_length=SESSION_LENGTH)
-    delete_agent(session, act_as(session, secret), agent.user_id)
+    assert delete_agent(session, act_as(session, secret), agent.user_id) is True
     assert session.get(Agent, agent.user_id) is None
     assert session.get(User, agent.user_id) is None
     assert session.exec(select(Token).where(Token.user_id == agent.user_id)).first() is None
@@ -446,7 +447,7 @@ def test_delete_does_nothing_when_data_is_attached(session):
     human, secret = make_account(session)
     agent = add_agent(session, act_as(session, secret), "Bot")
     _attach(session, agent.user_id, human.user_id)
-    delete_agent(session, act_as(session, secret), agent.user_id)
+    assert delete_agent(session, act_as(session, secret), agent.user_id) is False
     assert session.get(Agent, agent.user_id) is not None
     assert session.get(User, agent.user_id) is not None
     task = session.connection().execute(text("SELECT created_by, owned_by FROM task")).one()
@@ -480,6 +481,36 @@ def test_create_account_refuses_once_any_user_exists(session):
     with pytest.raises(ServiceError):
         create_account(session, "Ada", "ada@example.com", "password-1")
     assert session.exec(select(Human)).all() == []
+
+
+def test_each_refusal_names_its_kind(session):
+    _human, secret = make_account(session)
+    ada = act_as(session, secret)
+    bea_id, bea_secret = second_account(session)
+    bea_bot = add_agent(session, act_as(session, bea_secret), "Bea bot")
+    keyed, issued = live_agent(session, secret, "Keyed")
+    bare = add_agent(session, ada, "Bare")
+    retired = add_agent(session, ada, "Retired")
+    retire_agent(session, ada, retired.user_id)
+    bot = session.get(User, keyed.user_id)
+    cases = (
+        (Invalid, "name is required", lambda: add_agent(session, ada, " ")),
+        (Conflict, "name is taken", lambda: add_agent(session, ada, "Keyed")),
+        (Forbidden, "only a person changes agents", lambda: add_agent(session, bot, "Other")),
+        (NotFound, "no such agent", lambda: retire_agent(session, ada, 9999)),
+        (NotFound, "no such agent", lambda: retire_agent(session, ada, bea_bot.user_id)),
+        (Conflict, "agent already has a key", lambda: issue_key(session, ada, keyed.user_id, key_length=KEY_LENGTH)),
+        (Conflict, "agent has no key", lambda: roll_key(session, ada, bare.user_id, key_length=KEY_LENGTH)),
+        (Conflict, "agent is retired", lambda: issue_key(session, ada, retired.user_id, key_length=KEY_LENGTH)),
+        (Conflict, "agent is retired", lambda: roll_key(session, ada, retired.user_id, key_length=KEY_LENGTH)),
+        (Conflict, "setup has already run", lambda: create_account(session, "Eve", "e@example.com", "pw")),
+        (Invalid, "email is required", lambda: create_account(session, "Eve", " ", "pw")),
+    )
+    for kind, message, call in cases:
+        with pytest.raises(kind) as raised:
+            call()
+        assert raised.value.message == message
+    assert bea_id
 
 
 def test_a_missing_agent_is_refused(session):

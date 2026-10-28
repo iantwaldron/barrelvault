@@ -75,7 +75,7 @@ Only an acting user with the Human profile can create or change an agent. That c
 
 When nothing is attached, the delete removes the Agent profile, its session row, and the User row.
 
-When something is attached, the call does nothing until the person chooses.
+When something is attached, the call does nothing until the person chooses. The delete reports whether it removed the agent, so the caller knows to ask.
 
 - Reassign moves every task, block, and history column that points at the agent onto the person's user id, then removes the Agent profile, its session row, and the User row. Those rows then show the person's name. `owned_by` already points at the person and stays put.
 - Retire sets `retired_at`, clears `key_hash` and `key_expires_at`, and deletes the agent's session row. The columns that point at the agent stay. The name still shows on what it did.

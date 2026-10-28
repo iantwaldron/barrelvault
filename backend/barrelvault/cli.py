@@ -5,8 +5,8 @@ import getpass
 import sys
 
 from barrelvault.account import create_account, is_set_up
-from barrelvault.auth import ServiceError
 from barrelvault.db import apply_migrations, open_session
+from barrelvault.errors import ServiceError
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -32,8 +32,8 @@ def setup() -> None:
     try:
         with open_session() as session:
             create_account(session, name, email, password)
-    except ServiceError:
-        _exit("Setup was refused.")
+    except ServiceError as error:
+        _exit(f"Setup was refused: {error.message}.")
     print("Account created.")
 
 

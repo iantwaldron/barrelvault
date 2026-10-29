@@ -10,7 +10,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.routing import Route
 
 from barrelvault.api import routes, session_routes
-from barrelvault.api.shapes import error_body
+from barrelvault.api.shapes import error_body, invalid_body
 from barrelvault.errors import ServiceError
 from barrelvault.mcp_server import build_mcp, mcp_app
 from barrelvault.settings import Settings, load_settings
@@ -56,9 +56,7 @@ async def _service_error(_request: Request, error: Exception) -> JSONResponse:
 
 async def _validation_error(_request: Request, error: Exception) -> JSONResponse:
     assert isinstance(error, RequestValidationError)
-    first = error.errors()[0]
-    where = ".".join(str(part) for part in first["loc"] if part != "body")
-    return _error(422, "invalid", f"{where}: {first['msg']}" if where else first["msg"])
+    return JSONResponse(status_code=422, content=invalid_body(error.errors()))
 
 
 async def _http_error(_request: Request, error: Exception) -> JSONResponse:

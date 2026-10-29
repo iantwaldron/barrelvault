@@ -447,3 +447,16 @@ def test_the_password_check_does_not_hold_the_write_lock(app, monkeypatch):
         "/api/login", json={"email": "ada@example.com", "password": "password-1"}
     )
     assert response.status_code == 204
+
+
+def test_an_id_or_time_out_of_range_is_refused_with_the_error_body(ada):
+    for path in ("/api/tasks/99999999999999999999", f"/api/tasks/{2**70}/history"):
+        response = ada.get(path)
+        assert (response.status_code, response.json()["error"]) == (404, "not_found"), path
+    created = ada.post("/api/tasks", json={"title": "Child", "parent_id": 2**70})
+    assert (created.status_code, created.json()["error"]) == (404, "not_found")
+    far = ada.post("/api/tasks", json={"title": "Far", "due_at": "9999-12-31T23:00:00-05:00"})
+    assert (far.status_code, far.json()) == (
+        422,
+        {"error": "invalid", "message": "time is out of range"},
+    )

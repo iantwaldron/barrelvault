@@ -13,7 +13,7 @@ from barrelvault.account import account_of, actor_id
 from barrelvault.errors import Conflict, Invalid, NotFound
 from barrelvault.models import Block, Task, User
 from barrelvault.status import OPEN
-from barrelvault.tasks import load_tree, task_in_account, touch
+from barrelvault.tasks import fits_an_id, load_tree, task_in_account, touch
 from barrelvault.times import as_utc, now
 
 
@@ -101,6 +101,8 @@ def blocks_to_follow_up(session: Session, actor: User) -> list[FollowUp]:
 
 def _block(session: Session, actor: User, block_id: int) -> tuple[Block, Task]:
     """A block on a task in the actor's account. Any other block is not found."""
+    if not fits_an_id(block_id):
+        raise NotFound("no such block")
     owner = account_of(session, actor)
     row = session.exec(
         select(Block, Task)

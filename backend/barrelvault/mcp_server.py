@@ -12,9 +12,10 @@ from typing import Annotated, Any, Literal
 
 import anyio.to_thread
 from mcp.server.mcpserver import Context, MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
-from mcp.types import CallToolResult, TextContent, ToolAnnotations
-from pydantic import BaseModel
+from mcp.types import CallToolResult, InputRequiredResult, TextContent, ToolAnnotations
+from pydantic import BaseModel, StrictInt, ValidationError
 from sqlmodel import Session
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
@@ -35,6 +36,7 @@ from barrelvault.api.shapes import (
     error_body,
     follow_ups_out,
     history_out,
+    invalid_body,
     task_out,
 )
 from barrelvault.auth import authenticate
@@ -46,7 +48,7 @@ from barrelvault.blocks import (
     release_block,
 )
 from barrelvault.db import open_session
-from barrelvault.errors import Refused, ServiceError
+from barrelvault.errors import Invalid, Refused, ServiceError
 from barrelvault.models import User
 from barrelvault.surface import DuplicateWarnings
 from barrelvault.tasks import (
@@ -81,6 +83,9 @@ class AgentAccountOut(BaseModel):
     timezone: str
 
 
+# The fields update_task can set empty. An MCP argument cannot tell left out from null.
+Clearable = Literal["notes", "tags", "estimate_minutes", "due_at", "parent_id"]
+
 _READ = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 
 
@@ -104,6 +109,10 @@ def _bearer(headers: Any) -> str:
 Shape = BaseModel | Sequence[BaseModel] | None
 
 
+def _refusal(body: dict[str, Any]) -> CallToolResult:
+    return CallToolResult(content=[TextContent(type="text", text=json.dumps(body))], is_error=True)
+
+
 def _as_user(ctx: Context, work: Callable[[Session, User], Shape]) -> CallToolResult:
     """Run one tool's work as the session's user, in its own database session.
 
@@ -117,9 +126,7 @@ def _as_user(ctx: Context, work: Callable[[Session, User], Shape]) -> CallToolRe
             shape = work(session, authenticate(session, secret))
     except ServiceError as error:
         _status, body = error_body(error)
-        return CallToolResult(
-            content=[TextContent(type="text", text=json.dumps(body))], is_error=True
-        )
+        return _refusal(body)
     if shape is None:
         return CallToolResult(content=[])
     if isinstance(shape, BaseModel):
@@ -133,9 +140,34 @@ def _as_user(ctx: Context, work: Callable[[Session, User], Shape]) -> CallToolRe
     )
 
 
+class _Server(MCPServer):
+    """The SDK's server, holding a tool's arguments to the API's rules for a body.
+
+    An argument the tool does not take is refused, so a misspelled one is not lost, and a
+    refused argument's error is the API's invalid body rather than the SDK's text.
+    """
+
+    async def call_tool(
+        self, name: str, arguments: dict[str, Any], context: Context | None = None
+    ) -> CallToolResult | InputRequiredResult:
+        tool = next((tool for tool in await self.list_tools() if tool.name == name), None)
+        if tool is not None:
+            unknown = sorted(set(arguments) - set(tool.input_schema.get("properties", {})))
+            if unknown:
+                return _refusal(
+                    {"error": "invalid", "message": f"{unknown[0]}: Extra inputs are not permitted"}
+                )
+        try:
+            return await super().call_tool(name, arguments, context)
+        except ToolError as error:
+            if isinstance(error.__cause__, ValidationError):
+                return _refusal(invalid_body(error.__cause__.errors()))
+            raise
+
+
 def build_mcp(warnings: DuplicateWarnings) -> MCPServer:
     """The MCP server. It shares the duplicate warnings with the API's app."""
-    server = MCPServer(name="barrelvault", instructions=INSTRUCTIONS)
+    server = _Server(name="barrelvault", instructions=INSTRUCTIONS)
 
     @server.tool(
         annotations=_READ,
@@ -159,7 +191,7 @@ def build_mcp(warnings: DuplicateWarnings) -> MCPServer:
     )
     def list_tasks_tool(
         ctx: Context,
-        parent_id: int | None = None,
+        parent_id: StrictInt | None = None,
         tags: str | None = None,
         open_only: bool = False,
     ) -> Annotated[CallToolResult, list[TaskEntryOut]]:
@@ -178,7 +210,7 @@ def build_mcp(warnings: DuplicateWarnings) -> MCPServer:
         ),
     )
     def get_tree(
-        ctx: Context, parent_id: int, tags: str | None = None, open_only: bool = False
+        ctx: Context, parent_id: StrictInt, tags: str | None = None, open_only: bool = False
     ) -> Annotated[CallToolResult, list[TaskEntryOut]]:
         return _as_user(
             ctx,
@@ -192,7 +224,9 @@ def build_mcp(warnings: DuplicateWarnings) -> MCPServer:
         annotations=_READ,
         description=f"One task with its notes and its blocks. {WRITTEN_TEXT}",
     )
-    def get_task_tool(ctx: Context, task_id: int) -> Annotated[CallToolResult, TaskWithBlocksOut]:
+    def get_task_tool(
+        ctx: Context, task_id: StrictInt
+    ) -> Annotated[CallToolResult, TaskWithBlocksOut]:
         def work(session: Session, actor: User) -> TaskWithBlocksOut:
             task = task_out(session, get_task(session, actor, task_id))
             blocks = blocks_out(session, list_blocks(session, actor, task_id))
@@ -212,11 +246,11 @@ def build_mcp(warnings: DuplicateWarnings) -> MCPServer:
     def create_task(
         ctx: Context,
         title: str,
-        parent_id: int | None = None,
+        parent_id: StrictInt | None = None,
         notes: str | None = None,
         tags: str | None = None,
-        status: int = 0,
-        estimate_minutes: int | None = None,
+        status: StrictInt = 0,
+        estimate_minutes: StrictInt | None = None,
         due_at: datetime | None = None,
         allow_duplicate: bool = False,
     ) -> Annotated[CallToolResult, TaskOut]:
@@ -251,15 +285,15 @@ def build_mcp(warnings: DuplicateWarnings) -> MCPServer:
     )
     def update_task_tool(
         ctx: Context,
-        task_id: int,
+        task_id: StrictInt,
         title: str | None = None,
         notes: str | None = None,
         tags: str | None = None,
-        status: int | None = None,
-        estimate_minutes: int | None = None,
+        status: StrictInt | None = None,
+        estimate_minutes: StrictInt | None = None,
         due_at: datetime | None = None,
-        parent_id: int | None = None,
-        clear: list[str] | None = None,
+        parent_id: StrictInt | None = None,
+        clear: list[Clearable] | None = None,
         append_notes: str | None = None,
         add_tags: str | None = None,
         remove_tags: str | None = None,
@@ -281,6 +315,9 @@ def build_mcp(warnings: DuplicateWarnings) -> MCPServer:
         }
 
         def work(session: Session, actor: User) -> TaskOut:
+            both = [name for name in clear or () if sent[name] is not None]
+            if both:
+                raise Invalid(f"{both[0]}: sent and cleared")
             task = update_task(
                 session,
                 actor,
@@ -301,12 +338,13 @@ def build_mcp(warnings: DuplicateWarnings) -> MCPServer:
         annotations=_write(idempotent=False),
         description=(
             "Drop a task that stopped mattering, with a reason. Dropping keeps the task and "
-            "its history, and reopening it brings it back. Prefer this to delete_task."
+            "its history, and reopening it brings it back. Prefer this to delete_task. "
+            f"{WRITTEN_TEXT}"
         ),
     )
     def drop_task_tool(
         ctx: Context,
-        task_id: int,
+        task_id: StrictInt,
         reason: str | None = None,
         release_blocks: bool = False,
         expected_updated_at: datetime | None = None,
@@ -334,7 +372,7 @@ def build_mcp(warnings: DuplicateWarnings) -> MCPServer:
             "and cannot be undone. To set a task aside, use drop_task instead."
         ),
     )
-    def delete_task_tool(ctx: Context, task_id: int) -> CallToolResult:
+    def delete_task_tool(ctx: Context, task_id: StrictInt) -> CallToolResult:
         return _as_user(ctx, lambda session, actor: delete_task(session, actor, task_id))
 
     @server.tool(
@@ -342,11 +380,12 @@ def build_mcp(warnings: DuplicateWarnings) -> MCPServer:
         annotations=_write(idempotent=False),
         description=(
             "Block an open task. The reason is one line naming what the task waits on and who "
-            "was asked. A blocked task keeps its status until its blocks are released."
+            "was asked. A blocked task keeps its status until its blocks are released. "
+            f"{WRITTEN_TEXT}"
         ),
     )
     def add_block_tool(
-        ctx: Context, task_id: int, reason: str
+        ctx: Context, task_id: StrictInt, reason: str
     ) -> Annotated[CallToolResult, BlockOut]:
         return _as_user(
             ctx,
@@ -357,9 +396,11 @@ def build_mcp(warnings: DuplicateWarnings) -> MCPServer:
 
     @server.tool(
         annotations=_write(idempotent=True),
-        description="Rewrite a block's one-line reason.",
+        description=f"Rewrite a block's one-line reason. {WRITTEN_TEXT}",
     )
-    def edit_block(ctx: Context, block_id: int, reason: str) -> Annotated[CallToolResult, BlockOut]:
+    def edit_block(
+        ctx: Context, block_id: StrictInt, reason: str
+    ) -> Annotated[CallToolResult, BlockOut]:
         return _as_user(
             ctx,
             lambda session, actor: blocks_out(
@@ -370,9 +411,11 @@ def build_mcp(warnings: DuplicateWarnings) -> MCPServer:
     @server.tool(
         name="release_block",
         annotations=_write(idempotent=False),
-        description="Release a block. A released block stays released.",
+        description=f"Release a block. A released block stays released. {WRITTEN_TEXT}",
     )
-    def release_block_tool(ctx: Context, block_id: int) -> Annotated[CallToolResult, BlockOut]:
+    def release_block_tool(
+        ctx: Context, block_id: StrictInt
+    ) -> Annotated[CallToolResult, BlockOut]:
         return _as_user(
             ctx,
             lambda session, actor: blocks_out(session, [release_block(session, actor, block_id)])[
@@ -400,7 +443,7 @@ def build_mcp(warnings: DuplicateWarnings) -> MCPServer:
         description=f"A task's snapshots in the order they were written. {WRITTEN_TEXT}",
     )
     def task_history_tool(
-        ctx: Context, task_id: int
+        ctx: Context, task_id: StrictInt
     ) -> Annotated[CallToolResult, list[HistoryOut]]:
         return _as_user(
             ctx, lambda session, actor: history_out(session, task_history(session, actor, task_id))

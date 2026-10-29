@@ -1,5 +1,6 @@
 """Response shapes the API and MCP share: users named, never by id, and one error body."""
 
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from sqlmodel import Session
@@ -48,6 +49,13 @@ def error_body(error: ServiceError) -> tuple[int, dict[str, Any]]:
         )
         body["task"] = task.model_dump(mode="json")
     return status, body
+
+
+def invalid_body(errors: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """The invalid body for refused input, naming the first field pydantic refused."""
+    first = errors[0]
+    where = ".".join(str(part) for part in first["loc"] if part != "body")
+    return {"error": "invalid", "message": f"{where}: {first['msg']}" if where else first["msg"]}
 
 
 def named(session: Session, user_ids: set[int]) -> dict[int, UserOut]:

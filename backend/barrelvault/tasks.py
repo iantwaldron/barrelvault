@@ -447,8 +447,15 @@ def _check_estimate(estimate_minutes: int | None) -> int | None:
     return estimate_minutes
 
 
+def fits_an_id(value: int) -> bool:
+    """Whether SQLite can hold the value. A larger one names no row, and binding it overflows."""
+    return -(2**63) <= value < 2**63
+
+
 def task_in_account(session: Session, account_id: int, task_id: int) -> Task:
     """A task in the account. A task in another account is not found."""
+    if not fits_an_id(task_id):
+        raise NotFound("no such task")
     task = session.exec(
         select(Task).where(Task.id == task_id, Task.owned_by == account_id)
     ).one_or_none()

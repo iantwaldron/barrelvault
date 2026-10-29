@@ -269,23 +269,60 @@ async def test_each_tool_declares_its_annotations_and_marks_written_text(serving
         if name not in read_only:
             assert annotations.destructive_hint is (name == "delete_task"), name
             assert annotations.idempotent_hint is (name == "edit_block"), name
-    for name in (
-        "list_tasks",
-        "get_tree",
-        "get_task",
-        "create_task",
-        "update_task",
-        "task_history",
-    ):
+    # Every tool that returns written text marks it as data.
+    for name in set(tools) - {"get_account", "delete_task"}:
         assert WRITTEN_TEXT in (tools[name].description or ""), name
     assert "drop_task" in (tools["delete_task"].description or "")
     assert "parent_id" in tools["get_tree"].input_schema["required"]
 
 
-async def test_get_tree_needs_a_parent(serving, app, token):
+async def test_arguments_are_held_to_the_apis_rules(serving, app, token):
     async with _mcp(app, _bearer(token)) as client:
-        result = await client.call_tool("get_tree", {})
-        assert result.is_error
+        task = await _call(client, "create_task", title="Call Chad", notes="Asked.")
+        refusals = {
+            "parent_id: Field required": ("get_tree", {}),
+            "titel: Extra inputs are not permitted": (
+                "update_task",
+                {"task_id": task["id"], "titel": "Lost"},
+            ),
+            "status: Input should be a valid integer": (
+                "update_task",
+                {"task_id": task["id"], "status": "1"},
+            ),
+            "notes: sent and cleared": (
+                "update_task",
+                {"task_id": task["id"], "notes": "Kept", "clear": ["notes"]},
+            ),
+            "time is out of range": (
+                "create_task",
+                {"title": "Far", "due_at": "9999-12-31T23:00:00-05:00"},
+            ),
+        }
+        for message, (tool, arguments) in refusals.items():
+            refusal = await _refusal(client, tool, **arguments)
+            assert refusal["error"] == "invalid", (tool, refusal)
+            assert refusal["message"] == message, (tool, refusal)
+        unknown_field = await _refusal(client, "update_task", task_id=task["id"], clear=["due"])
+        assert unknown_field["error"] == "invalid" and unknown_field["message"].startswith(
+            "clear.0"
+        )
+        assert (await _refusal(client, "update_task", task_id=task["id"], status=True))[
+            "error"
+        ] == "invalid"
+        for tool, arguments in (
+            ("get_task", {"task_id": 2**70}),
+            ("release_block", {"block_id": 2**70}),
+        ):
+            assert (await _refusal(client, tool, **arguments))["error"] == "not_found", tool
+        # A tool that does not exist is the SDK's error, not a refused argument.
+        missing = await client.call_tool("no_such_tool", {"task_id": task["id"]})
+        assert missing.is_error and "no_such_tool" in missing.content[0].text
+        unchanged = await _call(client, "get_task", task_id=task["id"])
+        assert (unchanged["title"], unchanged["notes"], unchanged["status"]) == (
+            "Call Chad",
+            "Asked.",
+            0,
+        )
 
 
 async def test_a_duplicate_warned_through_the_api_is_confirmed_through_mcp(

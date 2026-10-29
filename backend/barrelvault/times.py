@@ -35,7 +35,10 @@ def to_utc(value: datetime, timezone: str) -> datetime:
     """
     if value.tzinfo is None:
         value = value.replace(tzinfo=ZoneInfo(timezone))
-    return _whole_ms(value.astimezone(UTC))
+    try:
+        return _whole_ms(value.astimezone(UTC))
+    except OverflowError:
+        raise Invalid("time is out of range") from None
 
 
 def check_timezone(name: str) -> str:

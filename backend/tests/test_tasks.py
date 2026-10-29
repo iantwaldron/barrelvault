@@ -513,6 +513,29 @@ def test_service_timestamps_are_whole_milliseconds(session, ada):
     assert update_task(session, ada, task.id, title="Echoed", expected_updated_at=echoed)
 
 
+def test_a_due_at_is_stored_to_the_millisecond(session, ada):
+    sent = datetime(2026, 11, 6, 23, 0, 0, 123456, tzinfo=UTC)
+    task = create_task(session, ada, "Call Chad", due_at=sent)
+    assert task.due_at == sent.replace(microsecond=123000)
+    moved = update_task(session, ada, task.id, due_at=sent + timedelta(microseconds=1))
+    assert moved.due_at == task.due_at
+    stored = session.connection().exec_driver_sql("SELECT due_at FROM task").scalar_one()
+    assert stored.endswith(".123000")
+    # The due_at a response shows matches the stored one, so a retried create is caught.
+    shown = datetime.fromisoformat(task.due_at.isoformat(timespec="milliseconds"))
+    with pytest.raises(Duplicate):
+        create_task(session, ada, "Call Chad", due_at=shown)
+
+
+def test_a_deleted_task_id_is_not_given_out_again(session, ada):
+    first = create_task(session, ada, "Call Chad")
+    delete_task(session, ada, first.id)
+    second = create_task(session, ada, "Call Sam")
+    assert second.id > first.id
+    with pytest.raises(NotFound):
+        get_task(session, ada, first.id)
+
+
 def test_a_tag_change_moves_updated_at_and_writes_a_snapshot(session, ada, bot):
     task = create_task(session, ada, "Call Chad", tags="deal:chad")
     tagged = update_task(session, bot, task.id, add="urgent")

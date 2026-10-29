@@ -14,10 +14,14 @@ from sqlmodel import Field, Session, SQLModel, select
 
 from barrelvault.history import HistoryBase, history
 from barrelvault.status import CLOSED
-from barrelvault.times import as_utc
+from barrelvault.times import as_utc, now
 
 
 class User(SQLModel, table=True):
+    # AUTOINCREMENT on every table whose id a caller holds: a deleted row's id is never
+    # handed out again, so a stale id is not found instead of naming another row.
+    __table_args__ = {"sqlite_autoincrement": True}
+
     id: int | None = Field(default=None, primary_key=True)
     # Unique within the account, without regard to case. The name_is_free triggers hold it.
     name: str = Field(index=True)
@@ -57,15 +61,17 @@ class Agent(SQLModel, table=True):
         """Store a new key hash and an expiry key_length seconds out. Return the raw key."""
         raw = secrets.token_hex(32)
         self.key_hash = hashlib.sha256(raw.encode()).hexdigest()
-        self.key_expires_at = datetime.now(UTC) + timedelta(seconds=key_length)
+        self.key_expires_at = now() + timedelta(seconds=key_length)
         return raw
 
 
 class Token(SQLModel, table=True):
+    __table_args__ = {"sqlite_autoincrement": True}
+
     id: int | None = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key="user.id", unique=True)
     secret_hash: str = Field(unique=True)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=now)
     expires_at: datetime
 
     @classmethod
@@ -75,7 +81,7 @@ class Token(SQLModel, table=True):
         Return the row and the raw secret. Only the secret's hash is stored.
         """
         raw = secrets.token_hex(32)
-        minted = datetime.now(UTC)
+        minted = now()
         token = cls(
             user_id=user_id,
             secret_hash=hashlib.sha256(raw.encode()).hexdigest(),
@@ -109,6 +115,7 @@ class Task(SQLModel, table=True):
             "trim(title, ' ' || char(9) || char(10) || char(13)) != ''", name="ck_task_title"
         ),
         Index("ix_task_owned_by_title", "owned_by", "title"),
+        {"sqlite_autoincrement": True},
     )
 
     id: int | None = Field(default=None, primary_key=True)
@@ -144,6 +151,7 @@ class Block(SQLModel, table=True):
         CheckConstraint(
             "(released_at IS NULL) = (released_by IS NULL)", name="ck_block_release_pair"
         ),
+        {"sqlite_autoincrement": True},
     )
 
     id: int | None = Field(default=None, primary_key=True)
@@ -160,6 +168,13 @@ TRIGGERS = (
     """CREATE TRIGGER agent_owner_is_fixed BEFORE UPDATE OF owner_id ON agent
 WHEN NEW.owner_id IS NOT OLD.owner_id
 BEGIN SELECT RAISE(ABORT, 'agent.owner_id is fixed'); END""",
+    # A profile's user is fixed, so an update cannot give one user both profiles.
+    """CREATE TRIGGER agent_user_is_fixed BEFORE UPDATE OF user_id ON agent
+WHEN NEW.user_id IS NOT OLD.user_id
+BEGIN SELECT RAISE(ABORT, 'agent.user_id is fixed'); END""",
+    """CREATE TRIGGER human_user_is_fixed BEFORE UPDATE OF user_id ON human
+WHEN NEW.user_id IS NOT OLD.user_id
+BEGIN SELECT RAISE(ABORT, 'human.user_id is fixed'); END""",
     """CREATE TRIGGER agent_owner_is_human BEFORE INSERT ON agent
 WHEN NOT EXISTS (SELECT 1 FROM human WHERE user_id = NEW.owner_id)
 BEGIN SELECT RAISE(ABORT, 'an agent is owned by a human'); END""",

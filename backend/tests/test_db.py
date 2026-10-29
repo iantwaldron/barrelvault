@@ -188,8 +188,9 @@ def test_migrations_downgrade_to_an_empty_database(database):
     apply_migrations()
     command.downgrade(migration_config(), "base")
     with get_engine().connect() as connection:
+        # sqlite_sequence, which AUTOINCREMENT keeps, is SQLite's own and stays.
         names = connection.execute(
-            text("SELECT name FROM sqlite_master WHERE type = 'table'")
+            text("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
         ).scalars()
         assert set(names) == {"alembic_version"}
 

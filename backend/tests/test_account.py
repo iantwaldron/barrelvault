@@ -20,6 +20,7 @@ from barrelvault.auth import authenticate, exchange_key
 from barrelvault.errors import Conflict, Forbidden, Invalid, NotFound, ServiceError
 from barrelvault.guards import SETUP_WRITE
 from barrelvault.models import Agent, Block, Human, Task, Token, User
+from barrelvault.times import now
 from tests.support import (
     KEY_LENGTH,
     SESSION_LENGTH,
@@ -124,9 +125,9 @@ def test_an_agent_name_is_unique_only_in_its_account(session):
 def test_issue_and_roll_set_the_key_expiry(session):
     _human, secret = make_account(session)
     agent = add_agent(session, act_as(session, secret), "Bot")
-    before = datetime.now(UTC)
+    before = now()
     issued = issue_key(session, act_as(session, secret), agent.user_id, key_length=100)
-    after = datetime.now(UTC)
+    after = now()
     session.refresh(agent)
     assert len(bytes.fromhex(issued.key)) == 32
     assert agent.key_hash != issued.key
@@ -347,6 +348,16 @@ def test_profile_changes_are_refused(session):
             {"user_id": agent.user_id},
         )
     session.rollback()
+    # Moving a profile onto the other kind's user would give that user both.
+    for statement in (
+        "UPDATE agent SET user_id = :human WHERE user_id = :agent",
+        "UPDATE human SET user_id = :agent WHERE user_id = :human",
+    ):
+        with pytest.raises(IntegrityError, match="user_id is fixed"):
+            session.connection().execute(
+                text(statement), {"human": human.user_id, "agent": agent.user_id}
+            )
+        session.rollback()
     assert session.get(Human, human.user_id) is not None
     assert session.get(Agent, human.user_id) is None
     assert session.get(Agent, agent.user_id) is not None
@@ -471,6 +482,23 @@ def test_delete_removes_an_agent_with_nothing_attached(session):
     assert session.get(User, agent.user_id) is None
     assert session.exec(select(Token).where(Token.user_id == agent.user_id)).first() is None
     assert session.get(Human, human.user_id) is not None
+
+
+def test_a_deleted_agent_id_is_not_given_out_again(session):
+    _human, secret = make_account(session)
+    agent = add_agent(session, act_as(session, secret), "Bot")
+    delete_agent(session, act_as(session, secret), agent.user_id)
+    assert add_agent(session, act_as(session, secret), "Bot").user_id > agent.user_id
+
+
+def test_agent_and_session_times_are_whole_milliseconds(session):
+    _human, secret = make_account(session)
+    agent, issued = live_agent(session, secret)
+    exchange_key(session, issued.key, session_length=SESSION_LENGTH)
+    token = session.exec(select(Token).where(Token.user_id == agent.user_id)).one()
+    retire_agent(session, act_as(session, secret), agent.user_id)
+    moments = (issued.key_expires_at, token.created_at, token.expires_at, agent.retired_at)
+    assert all(moment.microsecond % 1000 == 0 for moment in moments)
 
 
 def test_delete_does_nothing_when_data_is_attached(session):

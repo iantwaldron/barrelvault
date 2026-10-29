@@ -12,7 +12,11 @@ def now() -> datetime:
     A browser's Date keeps milliseconds, so an updated_at a client sends back
     compares equal to the stored one.
     """
-    moment = datetime.now(UTC)
+    return _whole_ms(datetime.now(UTC))
+
+
+def _whole_ms(moment: datetime) -> datetime:
+    """Every stored time is whole milliseconds, the precision a response shows."""
     return moment.replace(microsecond=moment.microsecond // 1000 * 1000)
 
 
@@ -24,14 +28,14 @@ def as_utc(value: datetime) -> datetime:
 
 
 def to_utc(value: datetime, timezone: str) -> datetime:
-    """A datetime the caller sent, in UTC.
+    """A datetime the caller sent, in UTC, to the millisecond.
 
     One with an offset is converted. One without an offset is read in the account's
     timezone, and zoneinfo settles a daylight-saving gap or overlap.
     """
     if value.tzinfo is None:
         value = value.replace(tzinfo=ZoneInfo(timezone))
-    return value.astimezone(UTC)
+    return _whole_ms(value.astimezone(UTC))
 
 
 def check_timezone(name: str) -> str:

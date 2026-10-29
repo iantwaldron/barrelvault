@@ -17,6 +17,7 @@ from barrelvault.auth import (
 )
 from barrelvault.errors import Refused, ServiceError
 from barrelvault.models import Token, User
+from barrelvault.times import now
 from tests.support import (
     SESSION_LENGTH,
     act_as,
@@ -32,12 +33,12 @@ def _tokens(session: Session) -> list[Token]:
 
 
 def test_login_and_exchange_store_the_actor_and_expiry(session):
-    before = datetime.now(UTC)
+    before = now()
     human = create_account(session, "Ada", "ada@example.com", "password-1", "America/Chicago")
     secret = login(session, "ada@example.com", "password-1", session_length=100)
     agent, issued = live_agent(session, secret)
     agent_secret = exchange_key(session, issued.key, session_length=100)
-    after = datetime.now(UTC)
+    after = now()
     rows = {token.user_id: token for token in _tokens(session)}
     assert set(rows) == {human.user_id, agent.user_id}
     for token in rows.values():

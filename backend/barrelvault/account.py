@@ -1,7 +1,7 @@
 """Account and agent writes. Each call takes the acting user; none reads a session."""
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Literal, NamedTuple
 
 from sqlalchemy import or_, update
@@ -11,7 +11,7 @@ from barrelvault.auth import delete_session, hash_password, normalize_email
 from barrelvault.errors import Conflict, Forbidden, Invalid, NotFound
 from barrelvault.guards import KEY_WRITE, SETUP_WRITE
 from barrelvault.models import Agent, Block, Human, Task, TaskHistory, User
-from barrelvault.times import as_utc, check_timezone
+from barrelvault.times import as_utc, check_timezone, now
 
 Kind = Literal["person", "agent"]
 PERSON: Kind = "person"
@@ -132,7 +132,7 @@ def retire_agent(session: Session, actor: User, agent_user_id: int) -> None:
     agent = _agent(session, human, agent_user_id)
     with _key_write(session, "retire"):
         if agent.retired_at is None:
-            agent.retired_at = datetime.now(UTC)
+            agent.retired_at = now()
         agent.key_hash = None
         agent.key_expires_at = None
         delete_session(session, agent.user_id)

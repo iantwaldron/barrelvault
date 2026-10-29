@@ -2,7 +2,7 @@
 
 Revision ID: 0001
 Revises: 
-Create Date: 2026-10-28 15:10:21.639484
+Create Date: 2026-10-29 09:07:52.200337
 
 """
 from typing import Sequence, Union
@@ -17,6 +17,12 @@ TRIGGERS = (
     """CREATE TRIGGER agent_owner_is_fixed BEFORE UPDATE OF owner_id ON agent
 WHEN NEW.owner_id IS NOT OLD.owner_id
 BEGIN SELECT RAISE(ABORT, 'agent.owner_id is fixed'); END""",
+    """CREATE TRIGGER agent_user_is_fixed BEFORE UPDATE OF user_id ON agent
+WHEN NEW.user_id IS NOT OLD.user_id
+BEGIN SELECT RAISE(ABORT, 'agent.user_id is fixed'); END""",
+    """CREATE TRIGGER human_user_is_fixed BEFORE UPDATE OF user_id ON human
+WHEN NEW.user_id IS NOT OLD.user_id
+BEGIN SELECT RAISE(ABORT, 'human.user_id is fixed'); END""",
     """CREATE TRIGGER agent_owner_is_human BEFORE INSERT ON agent
 WHEN NOT EXISTS (SELECT 1 FROM human WHERE user_id = NEW.owner_id)
 BEGIN SELECT RAISE(ABORT, 'an agent is owned by a human'); END""",
@@ -186,7 +192,8 @@ def upgrade() -> None:
     op.create_table('user',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('name', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-    sa.PrimaryKeyConstraint('id')
+    sa.PrimaryKeyConstraint('id'),
+    sqlite_autoincrement=True
     )
     with op.batch_alter_table('user', schema=None) as batch_op:
         batch_op.create_index(batch_op.f('ix_user_name'), ['name'], unique=False)
@@ -238,7 +245,8 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['owned_by'], ['user.id'], ),
     sa.ForeignKeyConstraint(['parent_id'], ['task.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['updated_by'], ['user.id'], ),
-    sa.PrimaryKeyConstraint('id')
+    sa.PrimaryKeyConstraint('id'),
+    sqlite_autoincrement=True
     )
     with op.batch_alter_table('task', schema=None) as batch_op:
         batch_op.create_index(batch_op.f('ix_task_owned_by'), ['owned_by'], unique=False)
@@ -254,7 +262,8 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['user_id'], ['user.id'], ),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('secret_hash'),
-    sa.UniqueConstraint('user_id')
+    sa.UniqueConstraint('user_id'),
+    sqlite_autoincrement=True
     )
     op.create_table('block',
     sa.Column('id', sa.Integer(), nullable=False),
@@ -269,7 +278,8 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['created_by'], ['user.id'], ),
     sa.ForeignKeyConstraint(['released_by'], ['user.id'], ),
     sa.ForeignKeyConstraint(['task_id'], ['task.id'], ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('id')
+    sa.PrimaryKeyConstraint('id'),
+    sqlite_autoincrement=True
     )
     with op.batch_alter_table('block', schema=None) as batch_op:
         batch_op.create_index(batch_op.f('ix_block_task_id'), ['task_id'], unique=False)

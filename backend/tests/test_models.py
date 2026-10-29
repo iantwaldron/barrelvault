@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from barrelvault.models import Agent, Human, Token, User
+from barrelvault.times import now
 from tests.support import KEY_LENGTH
 
 
@@ -220,9 +221,9 @@ def test_generate_key_stores_the_hash_and_expiry(session):
     owner = _human(session)
     user = _user(session, "Bot")
     agent = Agent(user_id=user.id, owner_id=owner.user_id)
-    before = datetime.now(UTC)
+    before = now()
     raw = agent.generate_key(100)
-    after = datetime.now(UTC)
+    after = now()
     session.add(agent)
     session.commit()
     session.refresh(agent)
@@ -298,12 +299,12 @@ def test_secret_hash_is_unique(session):
 
 def test_created_at_is_set_on_insert(session):
     user = _user(session, "Ada")
-    before = datetime.now(UTC)
+    before = now()
     token = Token(user_id=user.id, secret_hash="hash", expires_at=before)
     session.add(token)
     session.commit()
     session.refresh(token)
-    after = datetime.now(UTC)
+    after = now()
     assert before <= token.created_at <= after
 
 
@@ -322,9 +323,9 @@ def test_expires_at_is_required(session):
 
 def test_mint_stores_the_hash_and_expiry(session):
     user = _user(session, "Ada")
-    before = datetime.now(UTC)
+    before = now()
     token, raw = Token.mint(user.id, 100)
-    after = datetime.now(UTC)
+    after = now()
     session.add(token)
     session.commit()
     session.refresh(token)

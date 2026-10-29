@@ -65,7 +65,7 @@ def named(session: Session, user_ids: set[int]) -> dict[int, UserOut]:
 
 def task_out(session: Session, task: TaskDetail) -> TaskOut:
     names = named(session, {task.created_by, task.updated_by})
-    fields = {k: v for k, v in vars(task).items() if k != "owned_by"}
+    fields = dict(vars(task))
     fields["created_by"], fields["updated_by"] = names[task.created_by], names[task.updated_by]
     return TaskOut(**fields)
 

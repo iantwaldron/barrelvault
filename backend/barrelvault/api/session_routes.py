@@ -2,13 +2,13 @@
 
 from fastapi import APIRouter, Request, Response, status
 
-from barrelvault.account import account_view, set_timezone
-from barrelvault.api.deps import COOKIE, Actor, AppSettings, DbSession, presented_secret
+from barrelvault.account import account_view, actor_id, set_timezone
+from barrelvault.api.deps import COOKIE, Actor, AppSettings, DbSession
 from barrelvault.api.schemas import AccountOut, AccountPatch, ExchangeIn, LoginIn, TokenOut
 from barrelvault.auth import (
     check_password,
+    delete_session,
     exchange_key,
-    logout,
     session_expires_at,
     start_session,
 )
@@ -36,8 +36,8 @@ def login_route(body: LoginIn, request: Request, response: Response, settings: A
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-def logout_route(request: Request, response: Response, session: DbSession, _actor: Actor) -> None:
-    logout(session, presented_secret(request))
+def logout_route(response: Response, session: DbSession, actor: Actor) -> None:
+    delete_session(session, actor_id(actor))
     response.delete_cookie(COOKIE, httponly=True, samesite="lax")
 
 

@@ -24,6 +24,8 @@ from barrelvault.tree import TaskRow, Tree
 
 # A field the caller did not send. An update leaves it as stored.
 UNSET: Final[Any] = object()
+# The fields an update sets by name. Each surface sends UNSET for one it was not sent.
+EDITABLE_FIELDS = ("title", "notes", "tags", "status", "estimate_minutes", "due_at", "parent_id")
 
 ESTIMATE_MAX = 32767
 _ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
@@ -66,7 +68,6 @@ class TaskDetail:
     created_at: datetime
     updated_by: int
     updated_at: datetime
-    owned_by: int
     effectively_dropped: bool
     blocked: bool
     dropped_reason: str
@@ -481,7 +482,6 @@ def _detail(session: Session, task: Task) -> TaskDetail:
         created_at=as_utc(task.created_at),
         updated_by=task.updated_by,
         updated_at=as_utc(task.updated_at),
-        owned_by=task.owned_by,
         effectively_dropped=tree.is_effectively_dropped(task.id),
         blocked=blocked,
         dropped_reason=dropped_reason(task.notes) if task.status == DROPPED else "",

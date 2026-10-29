@@ -42,16 +42,23 @@ AppSettings = Annotated[Settings, Depends(_settings)]
 Warnings = Annotated[DuplicateWarnings, Depends(_warnings)]
 
 
+def bearer_secret(authorization: str) -> str | None:
+    """The session secret in an Authorization: Bearer header, or None when there is none."""
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() == "bearer" and token.strip():
+        return token.strip()
+    return None
+
+
 def presented_secret(request: Request) -> str:
     """The session secret a call presents: an agent's bearer token, or the person's cookie.
 
     A write that the cookie authenticates must send JSON, which a cross-site form cannot,
     so a page on another site cannot make the person's browser write here.
     """
-    header = request.headers.get("authorization", "")
-    scheme, _, token = header.partition(" ")
-    if scheme.lower() == "bearer" and token.strip():
-        return token.strip()
+    bearer = bearer_secret(request.headers.get("authorization", ""))
+    if bearer is not None:
+        return bearer
     cookie = request.cookies.get(COOKIE)
     if not cookie:
         raise Refused("refused")

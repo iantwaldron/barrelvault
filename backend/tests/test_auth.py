@@ -1,4 +1,3 @@
-import sqlite3
 import threading
 from datetime import UTC, datetime, timedelta
 
@@ -11,8 +10,8 @@ from barrelvault import auth, db
 from barrelvault.account import create_account, retire_agent
 from barrelvault.auth import (
     authenticate,
+    delete_session,
     exchange_key,
-    logout,
 )
 from barrelvault.errors import Refused, ServiceError
 from barrelvault.models import Token, User
@@ -241,24 +240,6 @@ def test_authenticate_refuses_unknown_and_expired_secrets(session):
         authenticate(session, secret)
 
 
-def test_authenticate_refuses_a_session_whose_user_is_gone(session):
-    human = create_account(session, "Ada", "ada@example.com", "password-1", "America/Chicago")
-    secret = login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
-    session.commit()
-    # Foreign keys only switch off outside a transaction, so use a bare connection.
-    raw = sqlite3.connect(session.get_bind().url.database)
-    raw.execute("PRAGMA foreign_keys=OFF")
-    raw.execute("DELETE FROM user WHERE id = ?", (human.user_id,))
-    raw.commit()
-    raw.close()
-    # End the read transaction that loaded human.user_id, so the delete is visible.
-    session.rollback()
-    session.expunge_all()
-    with pytest.raises(ServiceError):
-        authenticate(session, secret)
-    assert len(_tokens(session)) == 1
-
-
 def test_a_dead_agent_key_deletes_that_session_only(session):
     human, secret = make_account(session)
     agent, issued = live_agent(session, secret)
@@ -330,7 +311,6 @@ def test_blank_secrets_are_refused(session):
             exchange_key(session, secret, session_length=SESSION_LENGTH)
         with pytest.raises(ServiceError):
             authenticate(session, secret)
-        logout(session, secret)
     assert _tokens(session) == []
 
 
@@ -351,14 +331,14 @@ def test_a_naive_expiry_is_still_compared_in_utc(session):
     assert len(_tokens(session)) == 1
 
 
-def test_logout_deletes_the_row(session):
-    create_account(session, "Ada", "ada@example.com", "password-1", "America/Chicago")
+def test_delete_session_ends_the_session_once(session):
+    human = create_account(session, "Ada", "ada@example.com", "password-1", "America/Chicago")
     secret = login(session, "ada@example.com", "password-1", session_length=SESSION_LENGTH)
-    logout(session, secret)
+    delete_session(session, human.user_id)
     assert _tokens(session) == []
     with pytest.raises(ServiceError):
         authenticate(session, secret)
-    logout(session, secret)
+    delete_session(session, human.user_id)
     assert _tokens(session) == []
 
 

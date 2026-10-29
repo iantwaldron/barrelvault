@@ -1,4 +1,4 @@
-"""Account and agent writes. Each call takes the acting user; none reads a session."""
+"""The account and its agents. Each call takes the acting user; none reads a session."""
 
 from dataclasses import dataclass
 from datetime import datetime
@@ -278,7 +278,7 @@ def _id(user: User) -> int:
 
 
 def _agent(session: Session, human: Human, user_id: int) -> Agent:
-    """Return an agent in this human's account. Any other agent is refused."""
+    """Return an agent in this human's account. Any other agent is not found."""
     agent = session.exec(
         select(Agent).where(Agent.user_id == user_id, Agent.owner_id == human.user_id)
     ).one_or_none()
@@ -290,10 +290,9 @@ def _agent(session: Session, human: Human, user_id: int) -> Agent:
 def _remove_agent(session: Session, agent: Agent) -> None:
     user_id = agent.user_id
     delete_session(session, user_id)
-    user = session.get(User, user_id)
+    user = session.get_one(User, user_id)
     session.delete(agent)
-    if user is not None:
-        session.delete(user)
+    session.delete(user)
     session.flush()
 
 

@@ -22,6 +22,7 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from barrelvault.account import account_view
+from barrelvault.api.deps import bearer_secret
 from barrelvault.api.schemas import (
     BlockOut,
     FollowUpOut,
@@ -52,6 +53,7 @@ from barrelvault.errors import Invalid, Refused, ServiceError
 from barrelvault.models import User
 from barrelvault.surface import DuplicateWarnings
 from barrelvault.tasks import (
+    EDITABLE_FIELDS,
     UNSET,
     delete_task,
     drop_task,
@@ -100,10 +102,10 @@ def _write(*, idempotent: bool, destructive: bool = False) -> ToolAnnotations:
 
 def _bearer(headers: Any) -> str:
     """The session secret from an Authorization: Bearer header. The cookie is not read here."""
-    scheme, _, token = (headers.get("authorization") or "").partition(" ")
-    if scheme.lower() != "bearer" or not token.strip():
+    secret = bearer_secret(headers.get("authorization") or "")
+    if secret is None:
         raise Refused("refused")
-    return token.strip()
+    return secret
 
 
 Shape = BaseModel | Sequence[BaseModel] | None
@@ -300,15 +302,9 @@ def build_mcp(warnings: DuplicateWarnings) -> MCPServer:
         release_blocks: bool = False,
         expected_updated_at: datetime | None = None,
     ) -> Annotated[CallToolResult, TaskOut]:
-        sent = {
-            "title": title,
-            "notes": notes,
-            "tags": tags,
-            "status": status,
-            "estimate_minutes": estimate_minutes,
-            "due_at": due_at,
-            "parent_id": parent_id,
-        }
+        # The arguments so far are the tool's parameters, which name every editable field.
+        arguments = locals()
+        sent = {name: arguments[name] for name in EDITABLE_FIELDS}
         fields: dict[str, Any] = {
             name: (None if name in (clear or ()) else value if value is not None else UNSET)
             for name, value in sent.items()
@@ -478,12 +474,12 @@ class _RequireSession:
         self._app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] == "http":
-            headers = {k.decode().lower(): v.decode() for k, v in scope["headers"]}
-            if not await anyio.to_thread.run_sync(_session_is_valid, headers):
-                refusal = JSONResponse({"error": "refused", "message": "refused"}, status_code=401)
-                await refusal(scope, receive, send)
-                return
+        # A Starlette Route hands this only HTTP scopes.
+        headers = {k.decode().lower(): v.decode() for k, v in scope["headers"]}
+        if not await anyio.to_thread.run_sync(_session_is_valid, headers):
+            status, body = error_body(Refused("refused"))
+            await JSONResponse(body, status_code=status)(scope, receive, send)
+            return
         await self._app(scope, receive, send)
 
 

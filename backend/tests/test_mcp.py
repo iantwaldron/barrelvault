@@ -66,7 +66,7 @@ def token(app, ada) -> str:
 @pytest.fixture
 async def serving(app) -> AsyncIterator[None]:
     """The app's lifespan runs the MCP session manager, which starts once per app."""
-    async with app.state.mcp_server.session_manager.run():
+    async with app.router.lifespan_context(app):
         yield
 
 

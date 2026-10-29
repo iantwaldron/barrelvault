@@ -34,7 +34,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="Barrelvault", lifespan=lifespan)
     app.state.settings = settings or load_settings()
     app.state.duplicate_warnings = warnings
-    app.state.mcp_server = server
     app.include_router(session_routes.router, prefix="/api")
     app.include_router(routes.router, prefix="/api")
     app.router.routes.append(Route("/mcp", mcp_app(server)))

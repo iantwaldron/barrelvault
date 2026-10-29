@@ -72,9 +72,7 @@ def authenticate(session: Session, secret: str) -> User:
     token = session.exec(select(Token).where(Token.secret_hash == _digest(secret))).one_or_none()
     if token is None or as_utc(token.expires_at) <= datetime.now(UTC):
         raise Refused("refused")
-    user = session.get(User, token.user_id)
-    if user is None:
-        raise Refused("refused")
+    user = session.get_one(User, token.user_id)
     agent = session.get(Agent, user.id)
     if agent is not None and _agent_key_is_dead(agent):
         # The delete rides the caller's transaction. If that rolls back, the
@@ -100,19 +98,12 @@ def session_expires_at(session: Session, secret: str) -> datetime:
     return as_utc(token.expires_at)
 
 
-def logout(session: Session, secret: str) -> None:
-    if _blank(secret):
-        return
-    token = session.exec(select(Token).where(Token.secret_hash == _digest(secret))).one_or_none()
-    if token is not None:
-        session.delete(token)
-        session.flush()
-
-
 def delete_session(session: Session, user_id: int) -> None:
+    """End the user's session, if it has one. Logout, roll, retire, and removal call this."""
     token = session.exec(select(Token).where(Token.user_id == user_id)).one_or_none()
     if token is not None:
         session.delete(token)
+        session.flush()
 
 
 def start_session(session: Session, user_id: int, *, session_length: int) -> str:

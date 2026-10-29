@@ -45,8 +45,9 @@ def bot(session, ada) -> User:
 def test_a_create_by_the_person_and_by_an_agent_is_owned_by_the_person(session, ada, bot):
     mine = create_task(session, ada, "Call Chad")
     theirs = create_task(session, bot, "Draft the follow-up")
-    assert (mine.owned_by, mine.created_by, mine.updated_by) == (ada.id, ada.id, ada.id)
-    assert (theirs.owned_by, theirs.created_by, theirs.updated_by) == (ada.id, bot.id, bot.id)
+    assert (mine.created_by, mine.updated_by) == (ada.id, ada.id)
+    assert (theirs.created_by, theirs.updated_by) == (bot.id, bot.id)
+    assert session.get(Task, mine.id).owned_by == session.get(Task, theirs.id).owned_by == ada.id
     assert mine.updated_at == mine.created_at
 
 

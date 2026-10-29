@@ -35,6 +35,7 @@ from barrelvault.api.shapes import blocks_out, entries_out, history_out, task_ou
 from barrelvault.blocks import add_block, edit_block_reason, list_blocks, release_block
 from barrelvault.models import User
 from barrelvault.tasks import (
+    EDITABLE_FIELDS,
     UNSET,
     delete_task,
     drop_task,
@@ -157,8 +158,7 @@ def create_task_route(
 def update_task_route(task_id: int, body: TaskPatch, session: DbSession, actor: Actor) -> TaskOut:
     sent = body.model_fields_set
     fields: dict[str, Any] = {
-        name: getattr(body, name) if name in sent else UNSET
-        for name in ("title", "notes", "tags", "status", "estimate_minutes", "due_at", "parent_id")
+        name: getattr(body, name) if name in sent else UNSET for name in EDITABLE_FIELDS
     }
     task = update_task(
         session,

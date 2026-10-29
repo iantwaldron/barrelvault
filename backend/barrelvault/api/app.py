@@ -1,6 +1,6 @@
 """The FastAPI app: the API under /api, the MCP server at /mcp, and one error body."""
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -43,8 +43,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     return app
 
 
-def _error(status: int, kind: str, message: str, **extra: object) -> JSONResponse:
-    return JSONResponse(status_code=status, content={"error": kind, "message": message, **extra})
+def _error(
+    status: int, kind: str, message: str, headers: Mapping[str, str] | None = None
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status, content={"error": kind, "message": message}, headers=headers
+    )
 
 
 async def _service_error(_request: Request, error: Exception) -> JSONResponse:
@@ -61,4 +65,5 @@ async def _validation_error(_request: Request, error: Exception) -> JSONResponse
 async def _http_error(_request: Request, error: Exception) -> JSONResponse:
     assert isinstance(error, StarletteHTTPException)
     kind = "not_found" if error.status_code == 404 else "invalid"
-    return _error(error.status_code, kind, str(error.detail).lower())
+    # A 405 carries the Allow header the error was raised with.
+    return _error(error.status_code, kind, str(error.detail).lower(), headers=error.headers)

@@ -410,6 +410,7 @@ def test_every_error_kind_has_its_status_and_body(ada):
     assert blank.json() == {"error": "invalid", "message": "title is required"}
     wrong_method = ada.put("/api/tasks", json={})
     assert (wrong_method.status_code, wrong_method.json()["error"]) == (405, "invalid")
+    assert ada.put("/api/tasks/tree", json={}).headers["allow"] == "GET"
 
 
 def test_the_openapi_schema_declares_every_route_and_its_error_bodies():

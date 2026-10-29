@@ -41,6 +41,17 @@ class DuplicateOut(ErrorOut):
     task: DuplicateTaskOut
 
 
+def errors(*statuses: int, duplicate: bool = False) -> dict[int | str, dict[str, Any]]:
+    """The error responses a route declares, so the OpenAPI schema shows the real body.
+
+    A 409 on create may be a duplicate, which adds the matching task.
+    """
+    declared: dict[int | str, dict[str, Any]] = {code: {"model": ErrorOut} for code in statuses}
+    if duplicate:
+        declared[409] = {"model": DuplicateOut | ErrorOut}
+    return declared
+
+
 class LoginIn(Body):
     email: str
     password: str

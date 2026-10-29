@@ -412,10 +412,24 @@ def test_every_error_kind_has_its_status_and_body(ada):
     assert (wrong_method.status_code, wrong_method.json()["error"]) == (405, "invalid")
 
 
-def test_the_openapi_schema_declares_every_route():
+def test_the_openapi_schema_declares_every_route_and_its_error_bodies():
     schema = create_app(load_settings({})).openapi()
     assert len(schema["paths"]) == 18
-    assert "TaskOut" in schema["components"]["schemas"]
+    assert {"TaskOut", "ErrorOut", "DuplicateOut"} <= set(schema["components"]["schemas"])
+    assert "HTTPValidationError" not in schema["components"]["schemas"]
+    error = {"$ref": "#/components/schemas/ErrorOut"}
+
+    def body(operation: dict, status: str) -> dict:
+        return operation["responses"][status]["content"]["application/json"]["schema"]
+
+    for path, methods in schema["paths"].items():
+        for method, operation in methods.items():
+            assert body(operation, "422") == error, (method, path)
+            if path not in ("/api/login", "/api/exchange"):
+                assert body(operation, "401") == error, (method, path)
+    create = schema["paths"]["/api/tasks"]["post"]
+    assert {"$ref": "#/components/schemas/DuplicateOut"} in body(create, "409")["anyOf"]
+    assert body(schema["paths"]["/api/agents"]["post"], "403") == error
 
 
 def test_a_datetime_with_an_offset_comes_back_in_utc(ada):

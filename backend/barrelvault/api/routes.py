@@ -23,13 +23,13 @@ from barrelvault.api.schemas import (
     BlockIn,
     BlockOut,
     DropIn,
-    ErrorOut,
     HistoryOut,
     KeyOut,
     TaskCreate,
     TaskEntryOut,
     TaskOut,
     TaskPatch,
+    errors,
 )
 from barrelvault.api.shapes import blocks_out, entries_out, history_out, task_out
 from barrelvault.blocks import add_block, edit_block_reason, list_blocks, release_block
@@ -46,9 +46,12 @@ from barrelvault.tasks import (
     update_task,
 )
 
-router = APIRouter()
-
-_ATTACHED: dict[int | str, dict[str, Any]] = {status.HTTP_409_CONFLICT: {"model": ErrorOut}}
+# Every route here needs a session, names a row that may be missing, and checks its input.
+router = APIRouter(responses=errors(401, 404, 422))
+# Only the person manages agents, and a name, a key, or attached work can conflict.
+_AGENT_ERRORS = errors(403, 409)
+# A task or block write can meet a block, a stale read, or a released block.
+_WRITE_ERRORS = errors(409)
 
 
 # Agents. Only the person calls these, and the service refuses an agent.
@@ -59,38 +62,42 @@ def _agent_out(session: Session, actor: User, name: str) -> AgentOut:
     return next(AgentOut(**vars(a)) for a in list_agents(session, actor) if a.name == name)
 
 
-@router.get("/agents")
+@router.get("/agents", responses=errors(403))
 def agents_route(session: DbSession, actor: Actor) -> list[AgentOut]:
     return [AgentOut(**vars(agent)) for agent in list_agents(session, actor)]
 
 
-@router.post("/agents", status_code=status.HTTP_201_CREATED)
+@router.post("/agents", status_code=status.HTTP_201_CREATED, responses=_AGENT_ERRORS)
 def add_agent_route(body: AgentIn, session: DbSession, actor: Actor) -> AgentOut:
     add_agent(session, actor, body.name)
     return _agent_out(session, actor, body.name)
 
 
-@router.post("/agents/{name}/key", status_code=status.HTTP_201_CREATED)
+@router.post("/agents/{name}/key", status_code=status.HTTP_201_CREATED, responses=_AGENT_ERRORS)
 def issue_key_route(name: str, session: DbSession, actor: Actor, settings: AppSettings) -> KeyOut:
     agent_id = agent_by_name(session, actor, name)
     issued = issue_key(session, actor, agent_id, key_length=settings.key_length)
     return KeyOut(key=issued.key, key_expires_at=issued.key_expires_at)
 
 
-@router.post("/agents/{name}/key/roll", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/agents/{name}/key/roll", status_code=status.HTTP_201_CREATED, responses=_AGENT_ERRORS
+)
 def roll_key_route(name: str, session: DbSession, actor: Actor, settings: AppSettings) -> KeyOut:
     agent_id = agent_by_name(session, actor, name)
     issued = roll_key(session, actor, agent_id, key_length=settings.key_length)
     return KeyOut(key=issued.key, key_expires_at=issued.key_expires_at)
 
 
-@router.post("/agents/{name}/retire")
+@router.post("/agents/{name}/retire", responses=_AGENT_ERRORS)
 def retire_route(name: str, session: DbSession, actor: Actor) -> AgentOut:
     retire_agent(session, actor, agent_by_name(session, actor, name))
     return _agent_out(session, actor, name)
 
 
-@router.post("/agents/{name}/reassign", status_code=status.HTTP_204_NO_CONTENT)
+@router.post(
+    "/agents/{name}/reassign", status_code=status.HTTP_204_NO_CONTENT, responses=_AGENT_ERRORS
+)
 def reassign_route(name: str, session: DbSession, actor: Actor) -> None:
     reassign_agent(session, actor, agent_by_name(session, actor, name))
 
@@ -99,7 +106,7 @@ def reassign_route(name: str, session: DbSession, actor: Actor) -> None:
     "/agents/{name}",
     status_code=status.HTTP_204_NO_CONTENT,
     response_model=None,
-    responses=_ATTACHED,
+    responses=_AGENT_ERRORS,
 )
 def delete_agent_route(name: str, session: DbSession, actor: Actor) -> Response:
     """Delete an agent with nothing attached, or answer attached so the person can choose."""
@@ -143,7 +150,7 @@ def get_task_route(task_id: int, session: DbSession, actor: Actor) -> TaskOut:
     return task_out(session, get_task(session, actor, task_id))
 
 
-@router.post("/tasks", status_code=status.HTTP_201_CREATED)
+@router.post("/tasks", status_code=status.HTTP_201_CREATED, responses=errors(duplicate=True))
 def create_task_route(
     body: TaskCreate, session: DbSession, actor: Actor, warnings: Warnings
 ) -> TaskOut:
@@ -154,7 +161,7 @@ def create_task_route(
     return task_out(session, task)
 
 
-@router.patch("/tasks/{task_id}")
+@router.patch("/tasks/{task_id}", responses=_WRITE_ERRORS)
 def update_task_route(task_id: int, body: TaskPatch, session: DbSession, actor: Actor) -> TaskOut:
     sent = body.model_fields_set
     fields: dict[str, Any] = {
@@ -174,7 +181,7 @@ def update_task_route(task_id: int, body: TaskPatch, session: DbSession, actor: 
     return task_out(session, task)
 
 
-@router.post("/tasks/{task_id}/drop")
+@router.post("/tasks/{task_id}/drop", responses=_WRITE_ERRORS)
 def drop_task_route(task_id: int, body: DropIn, session: DbSession, actor: Actor) -> TaskOut:
     task = drop_task(
         session,
@@ -205,16 +212,18 @@ def list_blocks_route(task_id: int, session: DbSession, actor: Actor) -> list[Bl
     return blocks_out(session, list_blocks(session, actor, task_id))
 
 
-@router.post("/tasks/{task_id}/blocks", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/tasks/{task_id}/blocks", status_code=status.HTTP_201_CREATED, responses=_WRITE_ERRORS
+)
 def add_block_route(task_id: int, body: BlockIn, session: DbSession, actor: Actor) -> BlockOut:
     return blocks_out(session, [add_block(session, actor, task_id, body.reason)])[0]
 
 
-@router.patch("/blocks/{block_id}")
+@router.patch("/blocks/{block_id}", responses=_WRITE_ERRORS)
 def edit_block_route(block_id: int, body: BlockIn, session: DbSession, actor: Actor) -> BlockOut:
     return blocks_out(session, [edit_block_reason(session, actor, block_id, body.reason)])[0]
 
 
-@router.post("/blocks/{block_id}/release")
+@router.post("/blocks/{block_id}/release", responses=_WRITE_ERRORS)
 def release_block_route(block_id: int, session: DbSession, actor: Actor) -> BlockOut:
     return blocks_out(session, [release_block(session, actor, block_id)])[0]

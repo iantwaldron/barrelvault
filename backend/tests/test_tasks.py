@@ -24,6 +24,7 @@ from barrelvault.tasks import (
     task_tree,
     update_task,
 )
+from barrelvault.tree import Tree
 from tests.support import act_as, make_account, second_account
 
 DUE = datetime(2026, 11, 6, 23, tzinfo=UTC)
@@ -612,6 +613,24 @@ def test_a_filtered_tree_keeps_each_matchs_ancestors(session, ada):
     assert shape(task_tree(session, ada, middle.id, open_only=True)) == [(leaf.id, True)]
     assert all(task.matched for task in task_tree(session, ada))
     assert all(task.matched for task in list_tasks(session, ada, tags="home"))
+
+
+def test_a_deep_filtered_tree_climbs_each_ancestor_once(session, ada, monkeypatch):
+    parent = None
+    for depth in range(200):
+        parent = create_task(session, ada, f"Level {depth}", parent_id=parent and parent.id)
+    climbed = 0
+    walk = Tree.ancestors
+
+    def counted(tree: Tree, task_id: int):
+        nonlocal climbed
+        for node in walk(tree, task_id):
+            climbed += 1
+            yield node
+
+    monkeypatch.setattr(Tree, "ancestors", counted)
+    assert len(task_tree(session, ada)) == len(task_tree(session, ada, open_only=True)) == 200
+    assert climbed < 2 * 2 * 200
 
 
 def test_updated_at_moves_on_every_change_even_inside_one_millisecond(session, ada, monkeypatch):

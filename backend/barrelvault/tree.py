@@ -56,14 +56,14 @@ class Tree:
         """True when the task or any ancestor is dropped."""
         return task_id in self._dropped
 
-    def ancestors(self, task_id: int) -> list[int]:
-        """The ids above a task, nearest first, ending at a root."""
-        found: list[int] = []
+    def ancestors(self, task_id: int) -> Iterator[int]:
+        """The ids above a task, nearest first, ending at a root. A caller may stop early."""
+        seen: set[int] = set()
         node = self._rows[task_id].parent_id if task_id in self._rows else None
-        while node is not None and node in self._rows and node not in found:
-            found.append(node)
+        while node is not None and node in self._rows and node not in seen:
+            seen.add(node)
+            yield node
             node = self._rows[node].parent_id
-        return found
 
     def would_cycle(self, task_id: int, parent_id: int) -> bool:
         """True when nesting the task under parent_id would make it its own ancestor."""

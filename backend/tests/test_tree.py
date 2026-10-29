@@ -70,10 +70,10 @@ def test_the_cycle_check_refuses_the_task_itself_and_a_descendant():
 
 def test_ancestors_run_nearest_first_to_the_root():
     tree = Tree([_row(1, None), _row(2, 1), _row(3, 2), _row(4, None)])
-    assert tree.ancestors(3) == [2, 1]
-    assert tree.ancestors(1) == []
-    assert tree.ancestors(99) == []
+    assert list(tree.ancestors(3)) == [2, 1]
+    assert list(tree.ancestors(1)) == []
+    assert list(tree.ancestors(99)) == []
 
 
 def test_a_stored_loop_ends_the_walk_instead_of_hanging():
-    assert Tree([_row(1, 2), _row(2, 1)]).ancestors(1) == [2, 1]
+    assert list(Tree([_row(1, 2), _row(2, 1)]).ancestors(1)) == [2, 1]

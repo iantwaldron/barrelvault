@@ -58,3 +58,16 @@ def test_an_unclosed_fence_is_closed_before_a_drop_appends():
     assert dropped_reason(append_note(closed, dropped_block("superseded"))) == "superseded"
     assert close_open_fence("plain") == "plain"
     assert close_open_fence(None) == ""
+
+
+def test_a_tilde_fence_holds_a_dropped_block_as_its_text():
+    inside = "~~~\n```dropped\nnot a real reason\n```\n~~~"
+    assert dropped_reason(inside) == ""
+    # A backtick run does not close a tilde fence, nor a short tilde run a longer one.
+    assert close_open_fence("~~~~\n```\n~~~\nmore") == "~~~~\n```\n~~~\nmore\n~~~~"
+    closed = close_open_fence("~~~\nunterminated")
+    assert closed == "~~~\nunterminated\n~~~"
+    assert dropped_reason(append_note(closed, dropped_block("Real."))) == "Real."
+    # A backtick fence's info string has no backtick, so this line opens nothing.
+    assert close_open_fence("``` a`b\ntext") == "``` a`b\ntext"
+    assert dropped_reason("~~~dropped\nTilde reason.\n~~~") == "Tilde reason."

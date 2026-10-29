@@ -460,3 +460,10 @@ def test_an_id_or_time_out_of_range_is_refused_with_the_error_body(ada):
         422,
         {"error": "invalid", "message": "time is out of range"},
     )
+
+
+def test_an_agent_is_addressed_by_its_name_in_any_case(ada):
+    assert ada.post("/api/agents", json={"name": "Bot"}).status_code == 201
+    assert ada.post("/api/agents/bot/key", json={}).status_code == 201
+    slash = ada.post("/api/agents", json={"name": "ops/bot"})
+    assert (slash.status_code, slash.json()["error"]) == (422, "invalid")

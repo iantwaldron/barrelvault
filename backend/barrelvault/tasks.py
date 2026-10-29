@@ -506,9 +506,16 @@ def _summaries(
     matched = {row.id for row in rows if matches(row)}
     included = set(matched)
     if ancestors:
+        # Each climb stops at the first ancestor already climbed or outside the subtree,
+        # so the read is linear however deep the tree is.
         in_rows = {row.id for row in rows}
+        climbed: set[int] = set()
         for task_id in matched:
-            included.update(node for node in tree.ancestors(task_id) if node in in_rows)
+            for node in tree.ancestors(task_id):
+                if node not in in_rows or node in climbed:
+                    break
+                climbed.add(node)
+        included |= climbed
     blocked = open_block_task_ids(session, account_id)
     summaries = []
     for row in rows:

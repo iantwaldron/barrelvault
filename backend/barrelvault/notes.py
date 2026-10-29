@@ -6,10 +6,11 @@ operations only. Their output is text, never evaluated or passed to a template.
 
 import re
 
-# A code fence opens with three or more backticks, indented by up to three spaces,
-# and closes with at least as many backticks and nothing after them but spaces.
-_OPEN = re.compile(r"^ {0,3}(`{3,})([^`]*)$")
-_CLOSE = re.compile(r"^ {0,3}(`{3,})[ \t]*$")
+# A code fence opens with three or more backticks or tildes, indented by up to three
+# spaces, and closes with at least as many of the same character and nothing after them
+# but spaces. A backtick fence's info string has no backtick.
+_OPEN = re.compile(r"^ {0,3}(`{3,}(?=[^`]*$)|~{3,})(.*)$")
+_CLOSE = re.compile(r"^ {0,3}(`{3,}|~{3,})[ \t]*$")
 _LABEL = "dropped"
 
 
@@ -68,7 +69,7 @@ def _scan(notes: str) -> tuple[str, str | None]:
                 fence, label, body = opening[1], opening[2].strip(), []
             continue
         closing = _CLOSE.match(line)
-        if closing and len(closing[1]) >= len(fence):
+        if closing and closing[1][0] == fence[0] and len(closing[1]) >= len(fence):
             if label == _LABEL:
                 reason = "\n".join(body)
             fence = None

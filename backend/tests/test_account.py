@@ -9,6 +9,7 @@ from sqlmodel import Session, select
 from barrelvault import auth
 from barrelvault.account import (
     add_agent,
+    agent_by_name,
     create_account,
     delete_agent,
     issue_key,
@@ -120,6 +121,18 @@ def test_an_agent_name_is_unique_only_in_its_account(session):
     bea = act_as(session, bea_secret)
     assert add_agent(session, bea, "Bot").owner_id == bea.id
     assert add_agent(session, bea, "Ada").owner_id == bea.id
+
+
+def test_an_agent_name_is_trimmed_found_in_any_case_and_has_no_slash(session):
+    _human, secret = make_account(session)
+    actor = act_as(session, secret)
+    agent = add_agent(session, actor, "  Bot ")
+    assert session.get(User, agent.user_id).name == "Bot"
+    with pytest.raises(Conflict):
+        add_agent(session, actor, "bot ")
+    with pytest.raises(Invalid):
+        add_agent(session, actor, "ops/bot")
+    assert agent_by_name(session, actor, "BOT") == agent.user_id
 
 
 def test_issue_and_roll_set_the_key_expiry(session):

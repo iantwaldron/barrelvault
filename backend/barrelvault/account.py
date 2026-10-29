@@ -72,7 +72,7 @@ def create_account(session: Session, name: str, email: str, password: str, timez
     if is_set_up(session):
         raise Conflict("setup has already run")
     human = Human(
-        user_id=_add_user(session, name),
+        user_id=_add_user(session, name.strip()),
         email=address,
         password_hash=hash_password(password),
         timezone=timezone,
@@ -90,6 +90,10 @@ def add_agent(session: Session, actor: User, name: str) -> Agent:
     human = _acting_human(session, actor)
     if _blank(name):
         raise Invalid("name is required")
+    name = name.strip()
+    # The API addresses an agent by its name as one path segment.
+    if "/" in name:
+        raise Invalid("name cannot contain /")
     if _name_taken(session, human, name):
         raise Conflict("name is taken")
     agent = Agent(user_id=_add_user(session, name), owner_id=human.user_id)
@@ -203,12 +207,15 @@ def list_agents(session: Session, actor: User) -> list[AgentView]:
 
 
 def agent_by_name(session: Session, actor: User, name: str) -> int:
-    """The user id of the person's agent with this name. Another account's is not found."""
+    """The user id of the person's agent with this name, in any case.
+
+    Another account's is not found.
+    """
     human = _acting_human(session, actor)
     found = session.exec(
         select(Agent.user_id)
         .join(User, col(User.id) == Agent.user_id)
-        .where(Agent.owner_id == human.user_id, User.name == name)
+        .where(Agent.owner_id == human.user_id, col(User.name).collate("NOCASE") == name)
     ).first()
     if found is None:
         raise NotFound("no such agent")

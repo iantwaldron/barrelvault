@@ -24,9 +24,11 @@ barrelvault = ["migrations/*.py", "migrations/*.mako", "migrations/versions/*.py
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+filterwarnings = ["error"]
 
 [tool.coverage.run]
 source = ["barrelvault"]
+branch = true
 patch = ["subprocess"]
 
 [tool.ruff]

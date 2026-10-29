@@ -7,14 +7,15 @@ from sqlalchemy.exc import IntegrityError
 from barrelvault.account import add_agent
 from barrelvault.blocks import (
     add_block,
+    blocks_to_follow_up,
     edit_block_reason,
     list_blocks,
     release_block,
 )
 from barrelvault.errors import Conflict, Invalid, NotFound
 from barrelvault.models import User
-from barrelvault.status import COMPLETED, DROPPED, IN_PROGRESS
-from barrelvault.tasks import create_task, get_task, task_history, update_task
+from barrelvault.status import COMPLETED, DROPPED, IN_PROGRESS, TODO
+from barrelvault.tasks import create_task, drop_task, get_task, task_history, update_task
 from tests.support import act_as, make_account, second_account
 
 
@@ -155,3 +156,17 @@ def test_an_agent_cannot_reach_another_accounts_blocks(session, ada, bot):
     for call in calls:
         with pytest.raises(NotFound):
             call()
+
+
+def test_follow_ups_leave_out_effectively_dropped_tasks(session, ada, bot):
+    deal = create_task(session, ada, "Deal")
+    sign = create_task(session, ada, "Sign", parent_id=deal.id)
+    call = create_task(session, ada, "Call Chad")
+    add_block(session, ada, sign.id, "Waiting on legal")
+    held = add_block(session, bot, call.id, "Waiting on Chad")
+    drop_task(session, ada, deal.id)
+    assert [f.block.id for f in blocks_to_follow_up(session, bot)] == [held.id]
+    update_task(session, ada, deal.id, status=TODO)
+    assert len(blocks_to_follow_up(session, ada)) == 2
+    _bea_id, bea_secret = second_account(session)
+    assert blocks_to_follow_up(session, act_as(session, bea_secret)) == []

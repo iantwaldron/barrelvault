@@ -154,6 +154,18 @@ def test_migrations_build_the_model_schema(database):
     assert version == "0001"
 
 
+def _checks(table_sql: str) -> list[tuple[str, str]]:
+    """Each named CHECK in a table's SQL, with its body, read to the matching parenthesis."""
+    found = []
+    for match in re.finditer(r"CONSTRAINT (ck_\w+) CHECK \(", table_sql):
+        depth, end = 1, match.end()
+        while depth:
+            depth += {"(": 1, ")": -1}.get(table_sql[end], 0)
+            end += 1
+        found.append((match[1], table_sql[match.end() : end - 1]))
+    return found
+
+
 def test_migrations_build_the_model_triggers_and_checks(database, engine):
     """compare_metadata skips triggers and CHECK constraints, so compare them here."""
     apply_migrations()
@@ -165,10 +177,7 @@ def test_migrations_build_the_model_triggers_and_checks(database, engine):
         return {
             "triggers": {(name, sql) for kind, name, sql in rows if kind == "trigger"},
             "checks": {
-                name
-                for kind, _table, sql in rows
-                if kind == "table"
-                for name in re.findall(r"CONSTRAINT (ck_\w+)", sql)
+                check for kind, _table, sql in rows if kind == "table" for check in _checks(sql)
             },
         }
 
@@ -181,7 +190,7 @@ def test_migrations_build_the_model_triggers_and_checks(database, engine):
             for constraint in table.constraints
             if isinstance(constraint, CheckConstraint) and constraint.name
         }
-        assert schema(migrated)["checks"] == named_checks
+        assert {name for name, _body in schema(migrated)["checks"]} == named_checks
 
 
 def test_migrations_downgrade_to_an_empty_database(database):

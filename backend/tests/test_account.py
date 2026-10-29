@@ -191,9 +191,13 @@ def test_retire_is_the_only_way_to_set_retired_at(session):
     with pytest.raises(ServiceError):
         session.flush()
     session.rollback()
-    assert session.get(Agent, agent.user_id).retired_at is not None
+    first = session.get(Agent, agent.user_id).retired_at
+    assert first is not None
     with pytest.raises(ServiceError):
         authenticate(session, agent_secret)
+    # Retiring again keeps when the agent first retired.
+    retire_agent(session, act_as(session, secret), agent.user_id)
+    assert session.get(Agent, agent.user_id).retired_at == first
 
 
 def test_roll_replaces_an_expired_key(session):
@@ -428,7 +432,7 @@ def test_a_human_cannot_change_another_accounts_agent(session):
         lambda: reassign_agent(session, act_as(session, secret), bea_bot.user_id),
     )
     for call in calls:
-        with pytest.raises(ServiceError):
+        with pytest.raises(NotFound):
             call()
     session.expire_all()
     bot = session.get(Agent, bea_bot.user_id)

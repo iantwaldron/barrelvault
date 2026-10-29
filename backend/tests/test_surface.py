@@ -1,5 +1,7 @@
 """The duplicate confirmation the API and MCP share."""
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
 from barrelvault.account import add_agent
@@ -109,3 +111,18 @@ def test_the_default_window_is_two_minutes(session, ada):
     assert warnings.create(session, ada, "Kept", allow_duplicate=True)
     clock.now += 2
     _refused_first(warnings, session, ada, "Lapsed")
+
+
+def test_a_confirmation_matches_the_warned_due_at(session, ada):
+    warnings = DuplicateWarnings()
+    due = datetime(2026, 11, 6, 23, tzinfo=UTC)
+    create_task(session, ada, "Pay rent", due_at=due)
+    with pytest.raises(Duplicate):
+        warnings.create(session, ada, "Pay rent", due_at=due)
+    with pytest.raises(Conflict):
+        warnings.create(
+            session, ada, "Pay rent", allow_duplicate=True, due_at=due + timedelta(days=1)
+        )
+    _refused_first(warnings, session, ada, "Pay rent")
+    confirmed = warnings.create(session, ada, "Pay rent", allow_duplicate=True, due_at=due)
+    assert confirmed.due_at == due

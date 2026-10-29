@@ -1,7 +1,7 @@
 """The REST API, through FastAPI's test client against the production engine setup."""
 
 import re
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -134,6 +134,16 @@ def test_a_cookie_write_must_send_json(ada):
         "message": "a write with the session cookie must send application/json",
     }
     assert ada.get("/api/tasks").json() == []
+    # A body-less write sends no content type, and is refused the same way.
+    task = ada.post("/api/tasks", json={"title": "Kept"}).json()
+    assert ada.delete(f"/api/tasks/{task['id']}").status_code == 422
+    # The charset a generated client adds is still JSON.
+    charset = ada.post(
+        "/api/tasks",
+        content='{"title": "Charset"}',
+        headers={"content-type": "application/json; charset=utf-8"},
+    )
+    assert charset.status_code == 201
 
 
 def test_the_exchange_gives_an_agent_a_bearer_session(app, ada):
@@ -364,6 +374,7 @@ def test_another_account_is_not_found_on_every_task_block_and_agent_route(ada, b
         ("patch", block_path, {"reason": "Taken"}),
         ("post", f"{block_path}/release", {}),
         ("post", "/api/agents/Bot/key", {}),
+        ("post", "/api/agents/Bot/key/roll", {}),
         ("post", "/api/agents/Bot/retire", {}),
         ("post", "/api/agents/Bot/reassign", {}),
         ("delete", "/api/agents/Bot", None),
@@ -374,7 +385,13 @@ def test_another_account_is_not_found_on_every_task_block_and_agent_route(ada, b
         response = bea.request(method.upper(), path, **kwargs)
         assert (response.status_code, response.json()["error"]) == (404, "not_found"), path
     assert bea.get("/api/tasks").json() == []
+    assert bea.get("/api/tasks/tree").json() == []
+    assert bea.get("/api/agents").json() == []
     assert ada.get(task_path).json()["title"] == "Mine"
+    # The same name in two accounts is two agents, each reached only by its person.
+    assert bea.post("/api/agents", json={"name": "Bot"}).status_code == 201
+    assert bea.post("/api/agents/Bot/key", json={}).status_code == 201
+    assert [agent["key_expires_at"] for agent in ada.get("/api/agents").json()] == [None]
 
 
 def test_every_error_kind_has_its_status_and_body(ada):
@@ -402,9 +419,9 @@ def test_the_openapi_schema_declares_every_route():
 
 
 def test_a_datetime_with_an_offset_comes_back_in_utc(ada):
-    sent = (datetime(2026, 11, 6, 17, tzinfo=UTC) - timedelta(hours=0)).isoformat()
+    sent = datetime(2026, 11, 6, 17, tzinfo=timezone(timedelta(hours=-5))).isoformat()
     task = ada.post("/api/tasks", json={"title": "Offset", "due_at": sent}).json()
-    assert task["due_at"] == "2026-11-06T17:00:00.000Z"
+    assert task["due_at"] == "2026-11-06T22:00:00.000Z"
 
 
 def test_the_apps_lifespan_serves_mcp_beside_the_api(app, ada):

@@ -1,10 +1,20 @@
 """Fixtures shared by the test modules. Every engine is built the way production builds it."""
 
+import os
+
 import pytest
 from sqlmodel import Session, SQLModel
 
 from barrelvault.db import build_engine
 from tests.support import reset_engine
+
+
+@pytest.fixture(autouse=True)
+def _no_shell_settings(monkeypatch):
+    """A test reads only the settings it sets, never ones exported in the shell."""
+    for name in list(os.environ):
+        if name.startswith("BARRELVAULT_"):
+            monkeypatch.delenv(name)
 
 
 @pytest.fixture

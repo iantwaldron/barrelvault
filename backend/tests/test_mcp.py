@@ -224,6 +224,10 @@ async def test_another_account_is_not_found_on_every_task_and_block_tool(serving
             assert (await _refusal(theirs, tool, **arguments))["error"] == "not_found", tool
         assert await _call(theirs, "list_tasks") == []
         assert await _call(theirs, "blocks_to_follow_up") == []
+    async with _mcp(app, _bearer(token)) as mine:
+        kept = await _call(mine, "get_task", task_id=task["id"])
+    assert (kept["title"], kept["status"]) == ("Mine", 0)
+    assert [(b["reason"], b["released_at"]) for b in kept["blocks"]] == [("Waiting", None)]
 
 
 async def test_a_call_without_a_bearer_session_is_refused(serving, app, ada, token):

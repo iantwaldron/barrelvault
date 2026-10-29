@@ -5,16 +5,26 @@ from fastapi import APIRouter, Request, Response, status
 from barrelvault.account import account_view, set_timezone
 from barrelvault.api.deps import COOKIE, Actor, AppSettings, DbSession, presented_secret
 from barrelvault.api.schemas import AccountOut, AccountPatch, ExchangeIn, LoginIn, TokenOut
-from barrelvault.auth import exchange_key, login, logout, session_expires_at
+from barrelvault.auth import (
+    check_password,
+    exchange_key,
+    logout,
+    session_expires_at,
+    start_session,
+)
+from barrelvault.db import open_session
 
 router = APIRouter()
 
 
 @router.post("/login", status_code=status.HTTP_204_NO_CONTENT)
-def login_route(
-    body: LoginIn, request: Request, response: Response, session: DbSession, settings: AppSettings
-) -> None:
-    secret = login(session, body.email, body.password, session_length=settings.session_length)
+def login_route(body: LoginIn, request: Request, response: Response, settings: AppSettings) -> None:
+    # The password check runs in a read session and only the mint takes the write lock,
+    # so a burst of bad logins never holds up another call.
+    with open_session(immediate=False) as session:
+        user_id = check_password(session, body.email, body.password)
+    with open_session() as session:
+        secret = start_session(session, user_id, session_length=settings.session_length)
     response.set_cookie(
         COOKIE,
         secret,

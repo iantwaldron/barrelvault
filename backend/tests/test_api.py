@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import SQLModel
 
-from barrelvault import db
+from barrelvault import auth, db
 from barrelvault.account import create_account
 from barrelvault.api.app import create_app
 from barrelvault.api.deps import COOKIE
@@ -423,3 +423,27 @@ def test_the_apps_lifespan_serves_mcp_beside_the_api(app, ada):
         )
     assert response.status_code == 200
     assert "create_task" in {tool["name"] for tool in response.json()["result"]["tools"]}
+
+
+def test_a_read_does_not_wait_for_a_writer(ada):
+    ada.post("/api/tasks", json={"title": "Call Chad"})
+    with db.open_session() as writer:
+        writer.connection()
+        response = ada.get("/api/tasks")
+    assert response.status_code == 200 and len(response.json()) == 1
+
+
+def test_the_password_check_does_not_hold_the_write_lock(app, monkeypatch):
+    checked = auth._passwords.verify
+
+    def verify_while_another_call_writes(password: str, stored: str) -> bool:
+        # Another call takes the write lock while the slow check runs.
+        with db.open_session() as writer:
+            writer.connection()
+        return checked(password, stored)
+
+    monkeypatch.setattr(auth._passwords, "verify", verify_while_another_call_writes)
+    response = _client(app).post(
+        "/api/login", json={"email": "ada@example.com", "password": "password-1"}
+    )
+    assert response.status_code == 204

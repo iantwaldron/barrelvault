@@ -5,7 +5,7 @@ from sqlmodel import Session
 
 from barrelvault import auth, db
 from barrelvault.account import IssuedKey, add_agent, create_account, issue_key
-from barrelvault.auth import authenticate, login
+from barrelvault.auth import authenticate, check_password, start_session
 from barrelvault.models import Agent, Human, User
 from barrelvault.settings import DEFAULT_KEY_LENGTH, DEFAULT_SESSION_LENGTH
 
@@ -16,6 +16,12 @@ SESSION_LENGTH = DEFAULT_SESSION_LENGTH
 def act_as(session: Session, secret: str) -> User:
     """Authenticate the way the API does, then act as that user."""
     return authenticate(session, secret)
+
+
+def login(session: Session, email: str, password: str, *, session_length: int) -> str:
+    """Log in the way the login route does: check the password, then mint a session."""
+    user_id = check_password(session, email, password)
+    return start_session(session, user_id, session_length=session_length)
 
 
 def make_account(session: Session) -> tuple[Human, str]:

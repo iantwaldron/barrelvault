@@ -39,7 +39,11 @@ def normalize_email(email: str) -> str:
     return checked.normalized.lower()
 
 
-def login(session: Session, email: str, password: str, *, session_length: int) -> str:
+def check_password(session: Session, email: str, password: str) -> int:
+    """The user id whose email and password these are. Login's first step, which only reads.
+
+    The check is slow on purpose, so the caller runs it before taking the write lock.
+    """
     human = _human_by_email(session, email)
     stored = human.password_hash if human is not None else _DUMMY_PASSWORD_HASH
     try:
@@ -48,7 +52,7 @@ def login(session: Session, email: str, password: str, *, session_length: int) -
         password_matches = False
     if human is None or not password_matches:
         raise Refused("refused")
-    return _mint(session, human.user_id, session_length)
+    return human.user_id
 
 
 def exchange_key(session: Session, key: str, *, session_length: int) -> str:
@@ -58,7 +62,7 @@ def exchange_key(session: Session, key: str, *, session_length: int) -> str:
     # A retired agent has no key, so it never matches here.
     if agent is None or _agent_key_is_dead(agent):
         raise Refused("refused")
-    return _mint(session, agent.user_id, session_length)
+    return start_session(session, agent.user_id, session_length=session_length)
 
 
 def authenticate(session: Session, secret: str) -> User:
@@ -111,7 +115,8 @@ def delete_session(session: Session, user_id: int) -> None:
         session.delete(token)
 
 
-def _mint(session: Session, user_id: int, session_length: int) -> str:
+def start_session(session: Session, user_id: int, *, session_length: int) -> str:
+    """Mint a session for the user, replacing any it had. Return the raw secret."""
     token, raw = Token.mint(user_id, session_length)
     existing = session.exec(select(Token).where(Token.user_id == user_id)).one_or_none()
     if existing is not None:

@@ -17,8 +17,9 @@ COOKIE = "barrelvault_session"
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
-def _session() -> Iterator[Session]:
-    with open_session() as session:
+def _session(request: Request) -> Iterator[Session]:
+    # A read never writes, so it does not wait behind a writer for the lock.
+    with open_session(immediate=request.method not in _SAFE_METHODS) as session:
         yield session
 
 

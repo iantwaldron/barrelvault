@@ -12,7 +12,6 @@ from barrelvault.account import create_account, retire_agent
 from barrelvault.auth import (
     authenticate,
     exchange_key,
-    login,
     logout,
 )
 from barrelvault.errors import Refused, ServiceError
@@ -22,6 +21,7 @@ from tests.support import (
     SESSION_LENGTH,
     act_as,
     live_agent,
+    login,
     make_account,
     set_token_expiry,
     update_agent,
@@ -377,7 +377,7 @@ def test_overlapping_mints_leave_one_session(database):
         start.wait(timeout=5)
         try:
             with db.open_session() as db_session:
-                found.append(auth._mint(db_session, user_id, SESSION_LENGTH))
+                found.append(auth.start_session(db_session, user_id, session_length=SESSION_LENGTH))
         except BaseException as exc:
             errors.append(exc)
 

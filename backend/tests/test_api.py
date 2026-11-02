@@ -532,3 +532,10 @@ def test_mcp_takes_a_header_that_is_not_utf8(app, ada):
         )
     assert (refused.status_code, refused.json()) == (401, NO_SESSION)
     assert allowed.status_code == 200
+
+
+def test_history_gives_a_time_in_the_same_form_as_the_task(ada):
+    sent = {"title": "Call Chad", "due_at": "2026-11-06T23:00:00Z"}
+    task = ada.post("/api/tasks", json=sent).json()
+    history = ada.get(f"/api/tasks/{task['id']}/history").json()
+    assert history[0]["state"]["due_at"] == task["due_at"] == "2026-11-06T23:00:00.000Z"

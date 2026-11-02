@@ -25,6 +25,7 @@ from barrelvault.tasks import (
     update_task,
 )
 from barrelvault.tree import Tree
+from barrelvault.times import utc_text
 from tests.support import act_as, make_account, second_account
 
 DUE = datetime(2026, 11, 6, 23, tzinfo=UTC)
@@ -267,7 +268,7 @@ def test_history_reads_each_change_in_order(session, ada, bot):
         "Call Chad back",
     ]
     assert [entry.user_id for entry in entries] == [ada.id, bot.id, ada.id]
-    assert entries[0].state["due_at"] == "2026-11-06T23:00:00+00:00"
+    assert entries[0].state["due_at"] == "2026-11-06T23:00:00.000Z"
     assert entries[-1].state["status"] == IN_PROGRESS
     newest = get_task(session, ada, task.id)
     assert entries[-1].state == {
@@ -277,7 +278,7 @@ def test_history_reads_each_change_in_order(session, ada, bot):
         "tags": " ".join(newest.tags),
         "status": newest.status,
         "estimate_minutes": newest.estimate_minutes,
-        "due_at": newest.due_at.isoformat(),
+        "due_at": utc_text(newest.due_at),
     }
 
 

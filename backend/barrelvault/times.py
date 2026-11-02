@@ -27,6 +27,11 @@ def as_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
+def utc_text(value: datetime) -> str:
+    """ISO 8601 in UTC with milliseconds and a Z, such as 2026-11-06T23:00:00.000Z."""
+    return as_utc(value).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
 def to_utc(value: datetime, timezone: str) -> datetime:
     """A datetime the caller sent, in UTC, to the millisecond.
 

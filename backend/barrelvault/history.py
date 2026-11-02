@@ -16,7 +16,7 @@ from sqlalchemy.orm import Mapper
 from sqlalchemy.orm.attributes import instance_state
 from sqlmodel import Field, SQLModel
 
-from barrelvault.times import as_utc, now
+from barrelvault.times import now, utc_text
 
 # Columns every audited model carries that a snapshot leaves out.
 UNRECORDED = frozenset({"id", "created_by", "created_at", "updated_at", "updated_by", "owned_by"})
@@ -53,7 +53,7 @@ def history(history_model: type[HistoryBase]) -> Callable[[Model], Model]:
             for name in fields:
                 value = getattr(row, name)
                 if isinstance(value, datetime):
-                    value = as_utc(value).isoformat()
+                    value = utc_text(value)
                 elif value is None and name in text_fields:
                     value = ""
                 state[name] = value

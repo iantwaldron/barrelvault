@@ -1,17 +1,13 @@
 """The REST request and response models. FastAPI builds the OpenAPI schema from these."""
 
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, PlainSerializer, StrictInt
 
+from barrelvault.times import utc_text
 
-def _utc_text(moment: datetime) -> str:
-    """ISO 8601 in UTC with milliseconds and a Z, such as 2026-11-06T23:00:00.000Z."""
-    return moment.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-
-
-UtcTime = Annotated[datetime, PlainSerializer(_utc_text, return_type=str)]
+UtcTime = Annotated[datetime, PlainSerializer(utc_text, return_type=str)]
 
 
 class Body(BaseModel):

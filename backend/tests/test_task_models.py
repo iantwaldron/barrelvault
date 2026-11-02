@@ -82,7 +82,7 @@ def test_a_create_records_the_first_snapshot(session, ada):
         "tags": "",
         "status": TODO,
         "estimate_minutes": 30,
-        "due_at": "2026-01-02T12:00:00+00:00",
+        "due_at": "2026-01-02T12:00:00.000Z",
     }
 
 

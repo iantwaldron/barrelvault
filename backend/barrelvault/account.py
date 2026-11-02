@@ -91,9 +91,12 @@ def add_agent(session: Session, actor: User, name: str) -> Agent:
     if _blank(name):
         raise Invalid("name is required")
     name = name.strip()
-    # The API addresses an agent by its name as one path segment.
+    # The API addresses an agent by its name as one path segment, and a URL parser
+    # removes a segment of . or .. from the path.
     if "/" in name:
         raise Invalid("name cannot contain /")
+    if name in (".", ".."):
+        raise Invalid("name cannot be . or ..")
     if _name_taken(session, human, name):
         raise Conflict("name is taken")
     agent = Agent(user_id=_add_user(session, name), owner_id=human.user_id)

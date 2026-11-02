@@ -507,3 +507,11 @@ def test_an_agent_is_answered_under_its_stored_name(ada):
     retired = ada.post("/api/agents/bot/retire", json={})
     assert (retired.status_code, retired.json()["name"]) == (200, "Bot")
     assert retired.json()["retired_at"] is not None
+
+
+@pytest.mark.parametrize("name", [".", "..", " .. "])
+def test_an_agent_name_a_url_would_remove_is_refused(ada, name):
+    response = ada.post("/api/agents", json={"name": name})
+    assert response.status_code == 422
+    assert response.json() == {"error": "invalid", "message": "name cannot be . or .."}
+    assert ada.get("/api/agents").json() == []

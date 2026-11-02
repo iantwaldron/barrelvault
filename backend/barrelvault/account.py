@@ -197,13 +197,13 @@ def list_agents(session: Session, actor: User) -> list[AgentView]:
     human = _acting_human(session, actor)
     agents = {agent.user_id: agent for agent in human.get_agents(session)}
     users = session.exec(select(User).where(col(User.id).in_(agents)).order_by(col(User.name)))
-    views = []
-    for user in users:
-        agent = agents[_id(user)]
-        retired = as_utc(agent.retired_at) if agent.retired_at else None
-        expires = as_utc(agent.key_expires_at) if agent.key_expires_at else None
-        views.append(AgentView(user.name, retired, expires))
-    return views
+    return [_agent_view(user.name, agents[_id(user)]) for user in users]
+
+
+def agent_view(session: Session, actor: User, agent_user_id: int) -> AgentView:
+    """One of the person's agents, under the name it is stored with."""
+    agent = _agent(session, _acting_human(session, actor), agent_user_id)
+    return _agent_view(session.get_one(User, agent_user_id).name, agent)
 
 
 def agent_by_name(session: Session, actor: User, name: str) -> int:
@@ -270,6 +270,12 @@ def _acting_human(
     if human is None:
         raise Forbidden(refusal)
     return human
+
+
+def _agent_view(name: str, agent: Agent) -> AgentView:
+    retired = as_utc(agent.retired_at) if agent.retired_at else None
+    expires = as_utc(agent.key_expires_at) if agent.key_expires_at else None
+    return AgentView(name, retired, expires)
 
 
 def _id(user: User) -> int:

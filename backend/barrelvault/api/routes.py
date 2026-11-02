@@ -9,6 +9,7 @@ from sqlmodel import Session
 from barrelvault.account import (
     add_agent,
     agent_by_name,
+    agent_view,
     delete_agent,
     issue_key,
     list_agents,
@@ -57,9 +58,9 @@ _WRITE_ERRORS = errors(409)
 # Agents. Only the person calls these, and the service refuses an agent.
 
 
-def _agent_out(session: Session, actor: User, name: str) -> AgentOut:
+def _agent_out(session: Session, actor: User, agent_user_id: int) -> AgentOut:
     """The agent the route just added or changed, as the person's agent list shows it."""
-    return next(AgentOut(**vars(a)) for a in list_agents(session, actor) if a.name == name)
+    return AgentOut(**vars(agent_view(session, actor, agent_user_id)))
 
 
 @router.get("/agents", responses=errors(403))
@@ -69,8 +70,7 @@ def agents_route(session: DbSession, actor: Actor) -> list[AgentOut]:
 
 @router.post("/agents", status_code=status.HTTP_201_CREATED, responses=_AGENT_ERRORS)
 def add_agent_route(body: AgentIn, session: DbSession, actor: Actor) -> AgentOut:
-    add_agent(session, actor, body.name)
-    return _agent_out(session, actor, body.name)
+    return _agent_out(session, actor, add_agent(session, actor, body.name).user_id)
 
 
 @router.post("/agents/{name}/key", status_code=status.HTTP_201_CREATED, responses=_AGENT_ERRORS)
@@ -91,8 +91,9 @@ def roll_key_route(name: str, session: DbSession, actor: Actor, settings: AppSet
 
 @router.post("/agents/{name}/retire", responses=_AGENT_ERRORS)
 def retire_route(name: str, session: DbSession, actor: Actor) -> AgentOut:
-    retire_agent(session, actor, agent_by_name(session, actor, name))
-    return _agent_out(session, actor, name)
+    agent_id = agent_by_name(session, actor, name)
+    retire_agent(session, actor, agent_id)
+    return _agent_out(session, actor, agent_id)
 
 
 @router.post(

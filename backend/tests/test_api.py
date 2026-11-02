@@ -499,3 +499,11 @@ def test_an_agent_is_addressed_by_its_name_in_any_case(ada):
     assert ada.post("/api/agents/bot/key", json={}).status_code == 201
     slash = ada.post("/api/agents", json={"name": "ops/bot"})
     assert (slash.status_code, slash.json()["error"]) == (422, "invalid")
+
+
+def test_an_agent_is_answered_under_its_stored_name(ada):
+    added = ada.post("/api/agents", json={"name": "  Bot  "})
+    assert (added.status_code, added.json()["name"]) == (201, "Bot")
+    retired = ada.post("/api/agents/bot/retire", json={})
+    assert (retired.status_code, retired.json()["name"]) == (200, "Bot")
+    assert retired.json()["retired_at"] is not None

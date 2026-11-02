@@ -550,3 +550,10 @@ def test_an_invalid_create_is_not_reported_as_a_duplicate(ada, bad):
     # It issued no warning, so nothing is there for an override to confirm.
     override = ada.post("/api/tasks", json={**fields, "allow_duplicate": True})
     assert (override.status_code, override.json()["error"]) == (409, "conflict")
+
+
+def test_a_dead_cookie_is_refused_whatever_the_content_type(app):
+    client = _client(app)
+    client.cookies.set("barrelvault_session", "stale")
+    for response in (client.delete("/api/tasks/1"), client.post("/api/logout")):
+        assert (response.status_code, response.json()) == (401, NO_SESSION)

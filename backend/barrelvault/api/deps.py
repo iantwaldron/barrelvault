@@ -50,26 +50,24 @@ def bearer_secret(authorization: str) -> str | None:
     return None
 
 
-def presented_secret(request: Request) -> str:
-    """The session secret a call presents: an agent's bearer token, or the person's cookie.
+def _actor(request: Request, session: DbSession) -> User:
+    """The user whose session the call presents: an agent's bearer token, or the person's cookie.
 
     A write that the cookie authenticates must send JSON, which a cross-site form cannot,
-    so a page on another site cannot make the person's browser write here.
+    so a page on another site cannot make the person's browser write here. The session is
+    checked first, so a dead one is always refused as refused.
     """
     bearer = bearer_secret(request.headers.get("authorization", ""))
     if bearer is not None:
-        return bearer
+        return authenticate(session, bearer)
     cookie = request.cookies.get(COOKIE)
     if not cookie:
         raise Refused("refused")
+    actor = authenticate(session, cookie)
     content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
     if request.method not in _SAFE_METHODS and content_type != "application/json":
         raise Invalid("a write with the session cookie must send application/json")
-    return cookie
-
-
-def _actor(request: Request, session: DbSession) -> User:
-    return authenticate(session, presented_secret(request))
+    return actor
 
 
 Actor = Annotated[User, Depends(_actor)]

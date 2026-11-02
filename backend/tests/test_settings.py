@@ -71,3 +71,10 @@ def test_the_default_database_is_in_the_backend_directory(monkeypatch, tmp_path)
     monkeypatch.chdir(tmp_path)
     settings = load_settings({})
     assert Path(settings.db_path) == Path(__file__).resolve().parents[1] / "barrelvault.db"
+
+
+@pytest.mark.parametrize("name", ["BARRELVAULT_SESSION_LENGTH", "BARRELVAULT_KEY_LENGTH"])
+@pytest.mark.parametrize("raw", ["1000000000000", "99999999999999", "9" * 30])
+def test_a_length_too_long_to_give_an_expiry_is_refused(name, raw):
+    with pytest.raises(SettingsError, match="too long"):
+        load_settings({name: raw})

@@ -2,6 +2,7 @@
 
 import os
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 # backend/barrelvault.db, wherever the process was started from.
@@ -53,4 +54,8 @@ def _positive_int(raw: str | None, name: str, default: int) -> int:
         raise SettingsError(f"{name} must be a positive integer") from None
     if length <= 0:
         raise SettingsError(f"{name} must be a positive integer")
+    try:
+        datetime.now(UTC) + timedelta(seconds=length)
+    except OverflowError:
+        raise SettingsError(f"{name} is too long to give an expiry") from None
     return length

@@ -12,7 +12,7 @@ from barrelvault import auth, db
 from barrelvault.account import create_account
 from barrelvault.api.app import create_app
 from barrelvault.api.deps import COOKIE
-from barrelvault.settings import load_settings
+from barrelvault.settings import Settings, load_settings
 from tests.support import second_account, set_token_expiry
 
 UTC_TEXT = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$")
@@ -557,3 +557,9 @@ def test_a_dead_cookie_is_refused_whatever_the_content_type(app):
     client.cookies.set("barrelvault_session", "stale")
     for response in (client.delete("/api/tasks/1"), client.post("/api/logout")):
         assert (response.status_code, response.json()) == (401, NO_SESSION)
+
+
+def test_the_app_opens_the_database_its_settings_name(database, tmp_path):
+    chosen = tmp_path / "chosen.db"
+    create_app(Settings(db_path=str(chosen), session_length=60, key_length=60))
+    assert db.get_engine().url.database == str(chosen)

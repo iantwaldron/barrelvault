@@ -5,8 +5,9 @@ import getpass
 import sys
 
 from barrelvault.account import create_account, is_set_up
-from barrelvault.db import apply_migrations, open_session
+from barrelvault.db import apply_migrations, open_session, use_database
 from barrelvault.errors import ServiceError
+from barrelvault.settings import load_settings
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -14,6 +15,7 @@ def main(argv: list[str] | None = None) -> None:
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("setup")
     parser.parse_args(argv)
+    use_database(load_settings().db_path)
     setup()
 
 

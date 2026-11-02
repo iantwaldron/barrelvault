@@ -5,7 +5,7 @@ import os
 import pytest
 from sqlmodel import Session, SQLModel
 
-from barrelvault.db import build_engine
+from barrelvault.db import build_engine, use_database
 from tests.support import reset_engine
 
 
@@ -36,6 +36,6 @@ def database(monkeypatch, tmp_path):
     """Point the process engine at a fresh file that no table has been created in."""
     path = tmp_path / "barrelvault.db"
     monkeypatch.setenv("BARRELVAULT_DB", str(path))
-    reset_engine()
+    use_database(str(path))
     yield path
     reset_engine()

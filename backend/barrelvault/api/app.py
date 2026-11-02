@@ -11,6 +11,7 @@ from starlette.routing import Route
 
 from barrelvault.api import routes, session_routes
 from barrelvault.api.shapes import error_body, invalid_body
+from barrelvault.db import use_database
 from barrelvault.errors import ServiceError
 from barrelvault.mcp_server import build_mcp, mcp_app
 from barrelvault.settings import Settings, load_settings
@@ -22,6 +23,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     Settings load here, once, when the app starts.
     """
+    settings = settings or load_settings()
+    use_database(settings.db_path)
     # The duplicate warnings the API and MCP share, kept for this process's life.
     warnings = DuplicateWarnings()
     server = build_mcp(warnings)
@@ -32,7 +35,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             yield
 
     app = FastAPI(title="Barrelvault", lifespan=lifespan)
-    app.state.settings = settings or load_settings()
+    app.state.settings = settings
     app.state.duplicate_warnings = warnings
     app.include_router(session_routes.router, prefix="/api")
     app.include_router(routes.router, prefix="/api")

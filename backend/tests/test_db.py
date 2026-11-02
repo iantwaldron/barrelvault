@@ -21,9 +21,9 @@ from barrelvault.db import (
     get_engine,
     migration_config,
     open_session,
+    use_database,
 )
 from barrelvault.models import TRIGGERS, Token, User
-from tests.support import reset_engine
 
 
 def test_one_engine_for_the_process(database):
@@ -37,10 +37,9 @@ def test_database_file_is_created_when_a_session_connects(database):
     assert database.is_file()
 
 
-def test_missing_parent_directory_is_created(monkeypatch, tmp_path):
+def test_missing_parent_directory_is_created(database, tmp_path):
     path = tmp_path / "nested" / "barrelvault.db"
-    monkeypatch.setenv("BARRELVAULT_DB", str(path))
-    reset_engine()
+    use_database(str(path))
     with open_session() as session:
         session.connection()
     assert path.is_file()
@@ -205,7 +204,12 @@ def test_migrations_downgrade_to_an_empty_database(database):
 
 
 def test_two_processes_can_migrate_one_file(database):
-    script = "from barrelvault.db import apply_migrations; apply_migrations()"
+    script = (
+        "from barrelvault.db import apply_migrations, use_database\n"
+        "from barrelvault.settings import load_settings\n"
+        "use_database(load_settings().db_path)\n"
+        "apply_migrations()"
+    )
     runs = [
         subprocess.Popen(
             [sys.executable, "-c", script],

@@ -24,8 +24,8 @@ from barrelvault.tasks import (
     task_tree,
     update_task,
 )
-from barrelvault.tree import Tree
 from barrelvault.times import utc_text
+from barrelvault.tree import Tree
 from tests.support import act_as, make_account, second_account
 
 DUE = datetime(2026, 11, 6, 23, tzinfo=UTC)

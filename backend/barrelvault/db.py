@@ -12,18 +12,22 @@ from sqlalchemy import event
 from sqlalchemy.engine import Engine
 from sqlmodel import Session, create_engine
 
-from barrelvault.settings import load_settings
-
 BUSY_TIMEOUT_MS = 5000
 MIGRATIONS = Path(__file__).resolve().parent / "migrations"
 
 _engine: Engine | None = None
 
 
-def get_engine() -> Engine:
+def use_database(db_path: str) -> None:
+    """Point the process at one database file. Whoever loads the settings calls this."""
     global _engine
-    if _engine is None:
-        _engine = build_engine(load_settings().db_path)
+    if _engine is not None:
+        _engine.dispose()
+    _engine = build_engine(db_path)
+
+
+def get_engine() -> Engine:
+    assert _engine is not None, "use_database runs when the process starts"
     return _engine
 
 
@@ -99,4 +103,5 @@ def apply_migrations() -> None:
 def migration_config() -> Config:
     config = Config()
     config.set_main_option("script_location", str(MIGRATIONS))
+    config.attributes["engine"] = get_engine()
     return config

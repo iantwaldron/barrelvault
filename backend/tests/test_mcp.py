@@ -344,3 +344,11 @@ async def test_a_duplicate_warned_through_the_api_is_confirmed_through_mcp(
         assert confirmed["title"] == "pay RENT"
         again = await _refusal(client, "create_task", title="Pay rent")
         assert again["error"] == "duplicate" and again["task"]["title"] == "Pay rent"
+
+
+async def test_a_read_tool_does_not_wait_for_a_writer(serving, app, token):
+    async with _mcp(app, _bearer(token)) as client:
+        await _call(client, "create_task", title="Call Chad")
+        with db.open_session() as writer:
+            writer.connection()
+            assert len(await _call(client, "list_tasks")) == 1

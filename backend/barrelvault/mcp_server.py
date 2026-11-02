@@ -116,7 +116,14 @@ def _refusal(body: dict[str, Any]) -> CallToolResult:
     return CallToolResult(content=[TextContent(type="text", text=json.dumps(body))], is_error=True)
 
 
-def _as_user(ctx: Context, work: Callable[[Session, User], Shape]) -> CallToolResult:
+def _read_as_user(ctx: Context, work: Callable[[Session, User], Shape]) -> CallToolResult:
+    """Run a tool that only reads, so it does not wait behind a writer for the lock."""
+    return _as_user(ctx, work, immediate=False)
+
+
+def _as_user(
+    ctx: Context, work: Callable[[Session, User], Shape], *, immediate: bool = True
+) -> CallToolResult:
     """Run one tool's work as the session's user, in its own database session.
 
     A tool returns the result itself, so a refusal's text is exactly the API's error body
@@ -125,7 +132,7 @@ def _as_user(ctx: Context, work: Callable[[Session, User], Shape]) -> CallToolRe
     """
     try:
         secret = _bearer(ctx.headers or {})
-        with open_session() as session:
+        with open_session(immediate=immediate) as session:
             shape = work(session, authenticate(session, secret))
     except ServiceError as error:
         _status, body = error_body(error)
@@ -181,7 +188,7 @@ def build_mcp(warnings: DuplicateWarnings) -> MCPServer:
             view = account_view(session, actor)
             return AgentAccountOut(name=view.name, kind=view.kind, timezone=view.timezone)
 
-        return _as_user(ctx, work)
+        return _read_as_user(ctx, work)
 
     @server.tool(
         name="list_tasks",
@@ -198,7 +205,7 @@ def build_mcp(warnings: DuplicateWarnings) -> MCPServer:
         tags: str | None = None,
         open_only: bool = False,
     ) -> Annotated[CallToolResult, list[TaskEntryOut]]:
-        return _as_user(
+        return _read_as_user(
             ctx,
             lambda session, actor: entries_out(
                 session, list_tasks(session, actor, parent_id, tags=tags, open_only=open_only)
@@ -215,7 +222,7 @@ def build_mcp(warnings: DuplicateWarnings) -> MCPServer:
     def get_tree(
         ctx: Context, parent_id: StrictInt, tags: str | None = None, open_only: bool = False
     ) -> Annotated[CallToolResult, list[TaskEntryOut]]:
-        return _as_user(
+        return _read_as_user(
             ctx,
             lambda session, actor: entries_out(
                 session, task_tree(session, actor, parent_id, tags=tags, open_only=open_only)
@@ -235,7 +242,7 @@ def build_mcp(warnings: DuplicateWarnings) -> MCPServer:
             blocks = blocks_out(session, list_blocks(session, actor, task_id))
             return TaskWithBlocksOut(**task.model_dump(), blocks=blocks)
 
-        return _as_user(ctx, work)
+        return _read_as_user(ctx, work)
 
     @server.tool(
         annotations=_write(idempotent=False),
@@ -429,7 +436,7 @@ def build_mcp(warnings: DuplicateWarnings) -> MCPServer:
         ),
     )
     def blocks_to_follow_up_tool(ctx: Context) -> Annotated[CallToolResult, list[FollowUpOut]]:
-        return _as_user(
+        return _read_as_user(
             ctx,
             lambda session, actor: follow_ups_out(session, blocks_to_follow_up(session, actor)),
         )
@@ -442,7 +449,7 @@ def build_mcp(warnings: DuplicateWarnings) -> MCPServer:
     def task_history_tool(
         ctx: Context, task_id: StrictInt
     ) -> Annotated[CallToolResult, list[HistoryOut]]:
-        return _as_user(
+        return _read_as_user(
             ctx, lambda session, actor: history_out(session, task_history(session, actor, task_id))
         )
 

@@ -67,7 +67,9 @@ The file is created when the database code needs it. Each connection turns forei
 
 ## Migrations
 
-The schema is managed with Alembic. The revisions are in `backend/barrelvault/migrations/versions`, and setup applies them. After a model change, run this from `backend/` with the virtualenv active, then review the generated file:
+The schema is managed with Alembic. The revisions are in `backend/barrelvault/migrations/versions`, and setup applies them.
+
+Until the first deploy, a model change regenerates revision `0001` rather than adding a revision. After the first deploy, every schema change gets a new revision, and a shipped revision is never edited. To create one, run this from `backend/` with the virtualenv active, then review the generated file:
 
 ```sh
 env/bin/alembic revision --autogenerate -m "..."

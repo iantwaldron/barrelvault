@@ -650,3 +650,16 @@ def _attach(session: Session, agent_user_id: int, human_user_id: int) -> None:
         )
     )
     session.flush()
+
+
+def test_the_schema_refuses_removing_a_profile_to_replace_it(session):
+    human, secret = make_account(session)
+    agent = add_agent(session, act_as(session, secret), "Bot")
+    session.commit()
+    for statement, user_id, message in (
+        ("DELETE FROM human WHERE user_id = :id", human.user_id, "a human profile stays"),
+        ("DELETE FROM agent WHERE user_id = :id", agent.user_id, "deleted only with its user"),
+    ):
+        with pytest.raises(IntegrityError, match=message):
+            session.connection().execute(text(statement), {"id": user_id})
+        session.rollback()

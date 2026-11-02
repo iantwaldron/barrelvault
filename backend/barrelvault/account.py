@@ -299,9 +299,9 @@ def _agent(session: Session, human: Human, user_id: int) -> Agent:
 def _remove_agent(session: Session, agent: Agent) -> None:
     user_id = agent.user_id
     delete_session(session, user_id)
-    user = session.get_one(User, user_id)
-    session.delete(agent)
-    session.delete(user)
+    # Deleting the user cascades to the profile, the one way a profile can go.
+    session.expunge(agent)
+    session.delete(session.get_one(User, user_id))
     session.flush()
 
 

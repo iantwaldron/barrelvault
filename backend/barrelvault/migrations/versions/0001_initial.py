@@ -32,6 +32,11 @@ BEGIN SELECT RAISE(ABORT, 'a user has one profile'); END""",
     """CREATE TRIGGER human_user_is_not_agent BEFORE INSERT ON human
 WHEN EXISTS (SELECT 1 FROM agent WHERE user_id = NEW.user_id)
 BEGIN SELECT RAISE(ABORT, 'a user has one profile'); END""",
+    """CREATE TRIGGER human_profile_stays BEFORE DELETE ON human
+BEGIN SELECT RAISE(ABORT, 'a human profile stays'); END""",
+    """CREATE TRIGGER agent_profile_goes_with_its_user BEFORE DELETE ON agent
+WHEN EXISTS (SELECT 1 FROM user WHERE id = OLD.user_id)
+BEGIN SELECT RAISE(ABORT, 'an agent profile is deleted only with its user'); END""",
     """CREATE TRIGGER agent_name_is_free BEFORE INSERT ON agent
 WHEN EXISTS (
   SELECT 1 FROM user AS mine, user AS other
@@ -207,7 +212,7 @@ def upgrade() -> None:
     sa.CheckConstraint('(key_hash IS NULL) = (key_expires_at IS NULL)', name='ck_agent_key_pair'),
     sa.CheckConstraint('retired_at IS NULL OR key_hash IS NULL', name='ck_agent_retired_without_key'),
     sa.ForeignKeyConstraint(['owner_id'], ['user.id'], ),
-    sa.ForeignKeyConstraint(['user_id'], ['user.id'], ),
+    sa.ForeignKeyConstraint(['user_id'], ['user.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('user_id'),
     sa.UniqueConstraint('key_hash')
     )

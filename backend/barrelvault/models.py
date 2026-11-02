@@ -51,7 +51,7 @@ class Agent(SQLModel, table=True):
         ),
     )
 
-    user_id: int = Field(foreign_key="user.id", primary_key=True)
+    user_id: int = Field(foreign_key="user.id", primary_key=True, ondelete="CASCADE")
     owner_id: int = Field(foreign_key="user.id", index=True)
     key_hash: str | None = Field(default=None, unique=True)
     key_expires_at: datetime | None = Field(default=None)
@@ -184,6 +184,12 @@ BEGIN SELECT RAISE(ABORT, 'a user has one profile'); END""",
     """CREATE TRIGGER human_user_is_not_agent BEFORE INSERT ON human
 WHEN EXISTS (SELECT 1 FROM agent WHERE user_id = NEW.user_id)
 BEGIN SELECT RAISE(ABORT, 'a user has one profile'); END""",
+    # A user keeps its kind, so a profile cannot be removed and the other one added.
+    """CREATE TRIGGER human_profile_stays BEFORE DELETE ON human
+BEGIN SELECT RAISE(ABORT, 'a human profile stays'); END""",
+    """CREATE TRIGGER agent_profile_goes_with_its_user BEFORE DELETE ON agent
+WHEN EXISTS (SELECT 1 FROM user WHERE id = OLD.user_id)
+BEGIN SELECT RAISE(ABORT, 'an agent profile is deleted only with its user'); END""",
     # An agent's name differs, in any case, from its owner's and from the owner's other agents.
     """CREATE TRIGGER agent_name_is_free BEFORE INSERT ON agent
 WHEN EXISTS (

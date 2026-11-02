@@ -515,3 +515,20 @@ def test_an_agent_name_a_url_would_remove_is_refused(ada, name):
     assert response.status_code == 422
     assert response.json() == {"error": "invalid", "message": "name cannot be . or .."}
     assert ada.get("/api/agents").json() == []
+
+
+def test_mcp_takes_a_header_that_is_not_utf8(app, ada):
+    ada.post("/api/agents", json={"name": "Bot"})
+    key = ada.post("/api/agents/Bot/key", json={}).json()["key"]
+    token = _client(app).post("/api/exchange", json={"key": key}).json()["token"]
+    call = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+    accept = "application/json, text/event-stream"
+    with TestClient(app, base_url="https://testserver") as served:
+        refused = served.post("/mcp", json=call, headers={"x-other": b"\xff"})
+        allowed = served.post(
+            "/mcp",
+            json=call,
+            headers={"x-other": b"\xff", "authorization": f"Bearer {token}", "accept": accept},
+        )
+    assert (refused.status_code, refused.json()) == (401, NO_SESSION)
+    assert allowed.status_code == 200

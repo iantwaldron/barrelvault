@@ -18,6 +18,7 @@ from mcp.types import CallToolResult, InputRequiredResult, TextContent, ToolAnno
 from pydantic import BaseModel, StrictInt, ValidationError
 from sqlmodel import Session
 from starlette.applications import Starlette
+from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -475,15 +476,14 @@ class _RequireSession:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         # A Starlette Route hands this only HTTP scopes.
-        headers = {k.decode().lower(): v.decode() for k, v in scope["headers"]}
-        if not await anyio.to_thread.run_sync(_session_is_valid, headers):
+        if not await anyio.to_thread.run_sync(_session_is_valid, Headers(scope=scope)):
             status, body = error_body(Refused("refused"))
             await JSONResponse(body, status_code=status)(scope, receive, send)
             return
         await self._app(scope, receive, send)
 
 
-def _session_is_valid(headers: dict[str, str]) -> bool:
+def _session_is_valid(headers: Headers) -> bool:
     try:
         secret = _bearer(headers)
         with open_session(immediate=False) as session:

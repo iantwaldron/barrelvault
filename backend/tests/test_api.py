@@ -539,3 +539,14 @@ def test_history_gives_a_time_in_the_same_form_as_the_task(ada):
     task = ada.post("/api/tasks", json=sent).json()
     history = ada.get(f"/api/tasks/{task['id']}/history").json()
     assert history[0]["state"]["due_at"] == task["due_at"] == "2026-11-06T23:00:00.000Z"
+
+
+@pytest.mark.parametrize("bad", [{"status": 99}, {"estimate_minutes": -1}])
+def test_an_invalid_create_is_not_reported_as_a_duplicate(ada, bad):
+    fields = {"title": "Call Chad", "due_at": "2026-11-06T23:00:00Z"}
+    assert ada.post("/api/tasks", json=fields).status_code == 201
+    invalid = ada.post("/api/tasks", json={**fields, **bad})
+    assert (invalid.status_code, invalid.json()["error"]) == (422, "invalid")
+    # It issued no warning, so nothing is there for an override to confirm.
+    override = ada.post("/api/tasks", json={**fields, "allow_duplicate": True})
+    assert (override.status_code, override.json()["error"]) == (409, "conflict")

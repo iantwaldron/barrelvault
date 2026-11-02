@@ -97,6 +97,9 @@ def create_task(
     owner = account_of(session, actor)
     clean_title = normalize_title(title)
     stored_due = to_utc(due_at, owner.timezone) if due_at is not None else None
+    # An invalid create is refused as invalid, so it never warns of a duplicate.
+    clean_status = _check_status(status)
+    clean_estimate = _check_estimate(estimate_minutes)
     if parent_id is not None:
         task_in_account(session, owner.user_id, parent_id)
     if not allow_duplicate:
@@ -107,8 +110,8 @@ def create_task(
         title=clean_title,
         notes=notes,
         tags=stored_tags(tags),
-        status=_check_status(status),
-        estimate_minutes=_check_estimate(estimate_minutes),
+        status=clean_status,
+        estimate_minutes=clean_estimate,
         due_at=stored_due,
         created_by=actor_id(actor),
         created_at=moment,

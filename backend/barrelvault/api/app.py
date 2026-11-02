@@ -3,19 +3,45 @@
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 
+import anyio
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.routing import Route
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from barrelvault.api import routes, session_routes
+from barrelvault.api.deps import SAFE_METHODS
 from barrelvault.api.shapes import error_body, invalid_body
 from barrelvault.db import use_database
 from barrelvault.errors import ServiceError
 from barrelvault.mcp_server import build_mcp, mcp_app
 from barrelvault.settings import Settings, load_settings
 from barrelvault.surface import DuplicateWarnings
+
+# Well below the 40 worker threads a request's sync code runs on.
+MAX_WRITES_ADMITTED = 10
+
+
+class _WriteAdmission:
+    """Hold writes past a limit on the event loop, where waiting takes no worker thread.
+
+    A write holds the database lock across several hops onto a worker thread. If waiting
+    writers filled every thread, the one holding the lock could not finish, and they would
+    all run out the busy timeout. MCP calls are all POSTs, so its reads count here too.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self._app = app
+        self._admitted = anyio.Semaphore(MAX_WRITES_ADMITTED)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope["method"] in SAFE_METHODS:
+            await self._app(scope, receive, send)
+            return
+        async with self._admitted:
+            await self._app(scope, receive, send)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -40,6 +66,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(session_routes.router, prefix="/api")
     app.include_router(routes.router, prefix="/api")
     app.router.routes.append(Route("/mcp", mcp_app(server)))
+    app.add_middleware(_WriteAdmission)
     app.add_exception_handler(ServiceError, _service_error)
     app.add_exception_handler(RequestValidationError, _validation_error)
     app.add_exception_handler(StarletteHTTPException, _http_error)

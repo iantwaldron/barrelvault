@@ -51,7 +51,7 @@ from barrelvault.tasks import (
 router = APIRouter(responses=errors(401, 404, 422))
 # Only the person manages agents, and a name, a key, or attached work can conflict.
 _AGENT_ERRORS = errors(403, 409)
-# A task or block write can meet a block, a stale read, or a released block.
+# A task or block write can meet a block, a stale read, a released block, or a busy database.
 _WRITE_ERRORS = errors(409)
 
 
@@ -195,7 +195,7 @@ def drop_task_route(task_id: int, body: DropIn, session: DbSession, actor: Actor
     return task_out(session, task)
 
 
-@router.delete("/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT, responses=_WRITE_ERRORS)
 def delete_task_route(task_id: int, session: DbSession, actor: Actor) -> None:
     delete_task(session, actor, task_id)
 

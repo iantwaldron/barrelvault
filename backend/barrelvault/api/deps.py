@@ -14,12 +14,12 @@ from barrelvault.settings import Settings
 from barrelvault.surface import DuplicateWarnings
 
 COOKIE = "barrelvault_session"
-_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
 def _session(request: Request) -> Iterator[Session]:
     # A read never writes, so it does not wait behind a writer for the lock.
-    with open_session(immediate=request.method not in _SAFE_METHODS) as session:
+    with open_session(immediate=request.method not in SAFE_METHODS) as session:
         yield session
 
 
@@ -65,7 +65,7 @@ def _actor(request: Request, session: DbSession) -> User:
         raise Refused("refused")
     actor = authenticate(session, cookie)
     content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
-    if request.method not in _SAFE_METHODS and content_type != "application/json":
+    if request.method not in SAFE_METHODS and content_type != "application/json":
         raise Invalid("a write with the session cookie must send application/json")
     return actor
 

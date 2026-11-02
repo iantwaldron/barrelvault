@@ -1,7 +1,9 @@
 """The MCP server, through the SDK's client against the app, in process."""
 
+import asyncio
 import json
 import re
+import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -352,3 +354,29 @@ async def test_a_read_tool_does_not_wait_for_a_writer(serving, app, token):
         with db.open_session() as writer:
             writer.connection()
             assert len(await _call(client, "list_tasks")) == 1
+
+
+async def test_a_write_tool_that_cannot_get_the_lock_is_a_conflict(
+    serving, app, token, database, monkeypatch
+):
+    async with _mcp(app, _bearer(token)) as client:
+        monkeypatch.setattr(db, "BUSY_TIMEOUT_MS", 0)
+        db.get_engine().dispose()
+        holder = sqlite3.connect(database)
+        holder.execute("BEGIN IMMEDIATE")
+        try:
+            refused = await _refusal(client, "create_task", title="Call Chad")
+        finally:
+            holder.close()
+    assert refused == {"error": "conflict", "message": "the database is busy; try again"}
+
+
+async def test_a_burst_of_writes_all_land(app, token):
+    transport = httpx2.ASGITransport(app=app)
+    async with httpx2.AsyncClient(
+        transport=transport, base_url=BASE, headers=_bearer(token)
+    ) as http:
+        responses = await asyncio.gather(
+            *(http.post("/api/tasks", json={"title": f"Task {n}"}) for n in range(120))
+        )
+    assert [response.status_code for response in responses] == [201] * 120

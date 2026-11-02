@@ -1,6 +1,7 @@
 """The REST API, through FastAPI's test client against the production engine setup."""
 
 import re
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -428,6 +429,9 @@ def test_the_openapi_schema_declares_every_route_and_its_error_bodies():
             assert body(operation, "422") == error, (method, path)
             if path not in ("/api/login", "/api/exchange"):
                 assert body(operation, "401") == error, (method, path)
+            # Any write can find the database busy.
+            if method != "get":
+                assert "409" in operation["responses"], (method, path)
     create = schema["paths"]["/api/tasks"]["post"]
     assert {"$ref": "#/components/schemas/DuplicateOut"} in body(create, "409")["anyOf"]
     assert body(schema["paths"]["/api/agents"]["post"], "403") == error
@@ -563,3 +567,16 @@ def test_the_app_opens_the_database_its_settings_name(database, tmp_path):
     chosen = tmp_path / "chosen.db"
     create_app(Settings(db_path=str(chosen), session_length=60, key_length=60))
     assert db.get_engine().url.database == str(chosen)
+
+
+def test_a_write_that_cannot_get_the_lock_is_a_conflict(ada, database, monkeypatch):
+    monkeypatch.setattr(db, "BUSY_TIMEOUT_MS", 0)
+    db.get_engine().dispose()
+    holder = sqlite3.connect(database)
+    holder.execute("BEGIN IMMEDIATE")
+    try:
+        response = ada.post("/api/tasks", json={"title": "Call Chad"})
+    finally:
+        holder.close()
+    assert response.status_code == 409
+    assert response.json() == {"error": "conflict", "message": "the database is busy; try again"}

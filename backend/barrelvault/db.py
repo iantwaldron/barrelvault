@@ -10,7 +10,10 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import OperationalError
 from sqlmodel import Session, create_engine
+
+from barrelvault.errors import Conflict
 
 BUSY_TIMEOUT_MS = 5000
 MIGRATIONS = Path(__file__).resolve().parent / "migrations"
@@ -79,13 +82,14 @@ def open_session(*, immediate: bool = True) -> Iterator[Session]:
     A session is immediate unless the caller only reads. It takes the write
     lock from its first statement, so a second writer waits out the busy
     timeout instead of failing, and a check it reads cannot change before its
-    write commits. A read-only session passes immediate=False.
+    write commits. A read-only session passes immediate=False. A session still
+    waiting when the timeout ends is refused as a conflict, with nothing written.
     """
     # Objects stay readable after the commit, so a caller can return what it wrote.
     session = Session(get_engine(), expire_on_commit=False)
-    if immediate:
-        session.connection(execution_options={"immediate": True})
     try:
+        if immediate:
+            _take_write_lock(session)
         yield session
         session.commit()
     except Exception:
@@ -93,6 +97,15 @@ def open_session(*, immediate: bool = True) -> Iterator[Session]:
         raise
     finally:
         session.close()
+
+
+def _take_write_lock(session: Session) -> None:
+    try:
+        session.connection(execution_options={"immediate": True})
+    except OperationalError as exc:
+        if "locked" not in str(exc):
+            raise
+        raise Conflict("the database is busy; try again") from None
 
 
 def apply_migrations() -> None:

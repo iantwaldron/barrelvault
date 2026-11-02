@@ -24,9 +24,11 @@ from barrelvault.db import open_session
 # Each route checks its input. Login and the exchange are refused without a session.
 router = APIRouter(responses=errors(422))
 _SESSION_ERRORS = errors(401)
+# A write can also find the database busy.
+_WRITE_ERRORS = errors(401, 409)
 
 
-@router.post("/login", status_code=status.HTTP_204_NO_CONTENT, responses=_SESSION_ERRORS)
+@router.post("/login", status_code=status.HTTP_204_NO_CONTENT, responses=_WRITE_ERRORS)
 def login_route(body: LoginIn, request: Request, response: Response, settings: AppSettings) -> None:
     # The password check runs in a read session and only the mint takes the write lock,
     # so a burst of bad logins never holds up another call.
@@ -44,13 +46,13 @@ def login_route(body: LoginIn, request: Request, response: Response, settings: A
     )
 
 
-@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT, responses=_SESSION_ERRORS)
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT, responses=_WRITE_ERRORS)
 def logout_route(response: Response, session: DbSession, actor: Actor) -> None:
     delete_session(session, actor_id(actor))
     response.delete_cookie(COOKIE, httponly=True, samesite="lax")
 
 
-@router.post("/exchange", responses=_SESSION_ERRORS)
+@router.post("/exchange", responses=_WRITE_ERRORS)
 def exchange_route(body: ExchangeIn, session: DbSession, settings: AppSettings) -> TokenOut:
     token = exchange_key(session, body.key, session_length=settings.session_length)
     return TokenOut(token=token, expires_at=session_expires_at(session, token))
@@ -62,7 +64,7 @@ def account_route(session: DbSession, actor: Actor) -> AccountOut:
     return AccountOut(name=view.name, kind=view.kind, email=view.email, timezone=view.timezone)
 
 
-@router.patch("/account", responses=errors(401, 403))
+@router.patch("/account", responses=errors(401, 403, 409))
 def account_patch_route(body: AccountPatch, session: DbSession, actor: Actor) -> AccountOut:
     view = set_timezone(session, actor, body.timezone)
     return AccountOut(name=view.name, kind=view.kind, email=view.email, timezone=view.timezone)

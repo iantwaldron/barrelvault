@@ -11,7 +11,7 @@ from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
 from sqlalchemy import CheckConstraint, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlmodel import SQLModel, select
 
 from barrelvault import db
@@ -256,3 +256,9 @@ def test_the_wal_switch_gives_up_at_the_busy_timeout(monkeypatch):
 def test_the_wal_switch_raises_other_errors():
     with pytest.raises(sqlite3.OperationalError, match="disk I/O"):
         db._use_wal(_BusyCursor(["disk I/O error"]))
+
+
+def test_a_session_that_cannot_open_the_file_is_not_called_busy(database, tmp_path):
+    use_database(str(tmp_path))
+    with pytest.raises(OperationalError, match="unable to open"), open_session():
+        pass
